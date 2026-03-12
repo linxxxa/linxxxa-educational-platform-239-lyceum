@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.core.security import create_encrypted_access_token_string
+from app.core.security import create_access_token_for_user_account
 from app.database import get_database_session_generator
 from app.schemas.user import UserAccountCreate, UserAccountPublicInformation
 from app.services.auth_service import (
@@ -41,10 +41,7 @@ def authenticate_user_and_generate_token(
     encrypted_access_token_string = create_encrypted_access_token_string(
         authenticated_user_account_object.user_unique_identifier
     )
-    return {
-        "access_token": encrypted_access_token_string,
-        "token_type": "bearer",
-    }
+    return {"access_token": access_token_string, "token_type": "bearer"}
 
 
 @auth_router.post("/register", status_code=201)

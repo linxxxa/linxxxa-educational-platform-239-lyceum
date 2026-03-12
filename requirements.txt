@@ -2,6 +2,7 @@ fastapi
 uvicorn
 sqlalchemy
 psycopg2-binary
-bcrypt>=4.0.0
-PyJWT>=2.0.0
+bcrypt<4.1.0
+passlib[bcrypt]
+python-jose[cryptography]
 pydantic[email]

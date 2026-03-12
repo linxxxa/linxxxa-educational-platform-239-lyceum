@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.auth import auth_router
 from app.api.learning_topics import learning_topics_router
+from app.api.learning_cards import learning_cards_router
+from app.api.study_session import study_session_router
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 from app.database import (
@@ -36,6 +38,7 @@ def log_unhandled_exceptions_handler(
 fastapi_application.include_router(auth_router)
 fastapi_application.include_router(learning_topics_router)
 fastapi_application.include_router(learning_cards_router)
+fastapi_application.include_router(study_session_router)
 
 # Создание таблиц при старте приложения
 Base_Model_Declarative_Root.metadata.create_all(bind=platform_database_engine)

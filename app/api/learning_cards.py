@@ -4,7 +4,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_authorized_user_object
+from app.api.dependencies import get_currently_authenticated_user_data
 from app.database import get_database_session_generator
 from app.models.user_account import UserAccountModel
 from app.schemas.card import LearningCardCreate
@@ -20,7 +20,7 @@ learning_cards_router = APIRouter(
 def create_new_personal_learning_card(
     card_creation_request: LearningCardCreate,
     database_connection_session: Session = Depends(get_database_session_generator),
-    current_user: UserAccountModel = Depends(get_current_authorized_user_object),
+    current_user: UserAccountModel = Depends(get_currently_authenticated_user_data),
 ):
     """
     Создание карточки. Владелец берётся из JWT (current_user).

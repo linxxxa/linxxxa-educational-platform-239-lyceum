@@ -1,66 +1,75 @@
 """
-Безопасность: хэширование паролей (bcrypt) и JWT.
-Декодирование токена проверяет подпись — нельзя подделать ID.
-Безопаснее, чем передавать user_id в открытом виде.
+Безопасность: хэширование паролей (passlib/bcrypt) и JWT (python-jose).
+От получения пароля до подписи JWT: хеш → хранение в БД → верификация при входе →
+формирование payload → подпись секретом → возврат токена.
 """
-import bcrypt
-import jwt
 from datetime import datetime, timedelta, timezone
+from passlib.context import CryptContext
+from jose import JWTError, jwt
 
 from app.core.config import (
-    ACCESS_TOKEN_EXPIRE_MINUTES,
-    ALGORITHM,
+    ACCESS_TOKEN_EXPIRATION_MINUTES,
+    ALGORITHM_TYPE,
     SECRET_KEY_FOR_JWT_SIGNING,
 )
 
+# Контекст passlib: алгоритм bcrypt для хэширования паролей
+password_hashing_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 def hash_plain_text_password_with_bcrypt(plain_text_password: str) -> str:
-    """Хэширует пароль перед сохранением в БД."""
-    salt_bytes = bcrypt.gensalt()
-    password_bytes = plain_text_password.encode("utf-8")
-    hashed_bytes = bcrypt.hashpw(password_bytes, salt_bytes)
-    return hashed_bytes.decode("utf-8")
+    """
+    Хэширует пароль перед сохранением в БД.
+    Этап 1: plain text → bcrypt hash (salt + rounds).
+    """
+    return password_hashing_context.hash(plain_text_password)
 
 
 def verify_plain_password_against_bcrypt_hash(
-    plain_text_password: str, stored_hashed_password: str
+    provided_password_string_to_verify: str,
+    hashed_password_from_database: str,
 ) -> bool:
-    """Проверяет совпадение пароля с хешем в БД."""
-    return bcrypt.checkpw(
-        plain_text_password.encode("utf-8"),
-        stored_hashed_password.encode("utf-8"),
+    """
+    Проверяет совпадение введённого пароля с хешем из БД.
+    Этап 2: compare(plain, hash) без раскрытия пароля.
+    """
+    return password_hashing_context.verify(
+        provided_password_string_to_verify, hashed_password_from_database
     )
 
 
-def create_encrypted_access_token_string(user_unique_identifier: int) -> str:
+def create_access_token_for_user_account(
+    user_email_address: str,
+) -> str:
     """
-    Создаёт JWT. В payload — sub (user_id).
-    Подпись защищает от подделки; без секрета изменить ID нельзя.
+    Генерирует JWT для пользователя.
+    Этап 3–4: payload (email, exp) → подпись SECRET_KEY.
     """
     expires_at = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        minutes=ACCESS_TOKEN_EXPIRATION_MINUTES
     )
     payload = {
-        "sub": str(user_unique_identifier),
+        "user_email_address": user_email_address,
         "exp": expires_at,
     }
     return jwt.encode(
-        payload, SECRET_KEY_FOR_JWT_SIGNING, algorithm=ALGORITHM
+        payload,
+        SECRET_KEY_FOR_JWT_SIGNING,
+        algorithm=ALGORITHM_TYPE,
     )
 
 
-def validate_provided_json_web_token(encrypted_token_string: str) -> dict | None:
+def decode_and_validate_json_web_token(encrypted_token_string: str) -> dict | None:
     """
-    Декодирует и валидирует JWT. Проверяет подпись и срок действия.
-    Безопаснее передачи ID в заголовке — подделка без секрета невозможна.
-    Возвращает payload или None при ошибке.
+    Декодирует JWT, проверяет подпись и срок действия.
+    Возвращает decoded_token_payload_dictionary или None при ошибке.
     """
     try:
-        payload = jwt.decode(
+        decoded_token_payload_dictionary = jwt.decode(
             encrypted_token_string,
             SECRET_KEY_FOR_JWT_SIGNING,
-            algorithms=[ALGORITHM],
+            algorithms=[ALGORITHM_TYPE],
         )
-        return payload
-    except jwt.PyJWTError:
+        return decoded_token_payload_dictionary
+    except JWTError:
         return None
