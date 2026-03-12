@@ -1,5 +1,8 @@
 from sqlalchemy import Column, Integer, String, Float
+from sqlalchemy.orm import relationship
+
 from app.database import Base_Model_Declarative_Root
+
 
 class UserAccountModel(Base_Model_Declarative_Root):
     """
@@ -22,3 +25,7 @@ class UserAccountModel(Base_Model_Declarative_Root):
     # Статистика для Индекса Готовности (RI)
     average_response_time_seconds = Column(Float, default=0.0)     # Параметр τ
     knowledge_deviation_sigma = Column(Float, default=0.0)         # Параметр σ
+
+    owned_learning_topics = relationship(
+        "LearningTopicModel", back_populates="topic_owner"
+    )

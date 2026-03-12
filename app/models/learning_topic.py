@@ -12,8 +12,8 @@ from app.database import Base_Model_Declarative_Root
 class LearningTopicModel(Base_Model_Declarative_Root):
     """
     Таблица тем обучения с древовидной структурой.
-    Энтропия topic_entropy_complexity_value H(T) влияет на адаптивность:
-    сложность темы учитывается в алгоритме повторений.
+    topic_owner_user_id: привязка к автору; null — системная (общая) тема.
+    Позволяет разграничивать личные и общие темы, делиться тестами.
     """
     __tablename__ = "learning_topics"
 
@@ -26,8 +26,14 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         ForeignKey("learning_topics.topic_unique_identifier"),
         nullable=True,
     )
+    topic_owner_user_id = Column(
+        Integer,
+        ForeignKey("user_accounts.user_unique_identifier"),
+        nullable=True,
+    )
     subtopics = relationship(
         "LearningTopicModel",
         backref="parent_topic",
         remote_side=[topic_unique_identifier],
     )
+    topic_owner = relationship("UserAccountModel", back_populates="owned_learning_topics")
