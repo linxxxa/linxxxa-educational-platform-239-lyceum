@@ -29,3 +29,6 @@ class UserAccountModel(Base_Model_Declarative_Root):
     owned_learning_topics = relationship(
         "LearningTopicModel", back_populates="topic_owner"
     )
+    owned_learning_cards = relationship(
+        "LearningCardModel", back_populates="card_owner"
+    )

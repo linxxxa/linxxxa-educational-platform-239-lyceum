@@ -37,3 +37,6 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         remote_side=[topic_unique_identifier],
     )
     topic_owner = relationship("UserAccountModel", back_populates="owned_learning_topics")
+    learning_cards_in_topic = relationship(
+        "LearningCardModel", back_populates="parent_topic"
+    )

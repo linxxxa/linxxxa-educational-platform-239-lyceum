@@ -15,7 +15,8 @@ from app.database import (
     platform_database_engine,
 )
 from app.models.user_account import UserAccountModel
-from app.models.learning_topic import LearningTopicModel  # Регистрация моделей для create_all
+from app.models.learning_topic import LearningTopicModel
+from app.models.learning_card import LearningCardModel  # Регистрация моделей для create_all
 
 fastapi_application = FastAPI(title="ФМЛ 239 — Адаптивное обучение")
 
@@ -34,6 +35,7 @@ def log_unhandled_exceptions_handler(
 
 fastapi_application.include_router(auth_router)
 fastapi_application.include_router(learning_topics_router)
+fastapi_application.include_router(learning_cards_router)
 
 # Создание таблиц при старте приложения
 Base_Model_Declarative_Root.metadata.create_all(bind=platform_database_engine)

@@ -1,19 +1,10 @@
 """
 Сервис аутентификации: хэширование паролей и проверка уникальности email.
-Вынесенная логика для соблюдения лимита 25 строк в эндпоинтах.
 """
-import bcrypt
-
-
-def hash_plain_text_password_with_bcrypt(plain_text_password: str) -> str:
-    """
-    Хэширует пароль пользователя перед сохранением в базу данных.
-    Использует bcrypt напрямую (совместимость с bcrypt 4.1+).
-    """
-    salt_bytes = bcrypt.gensalt()
-    password_bytes = plain_text_password.encode("utf-8")
-    hashed_bytes = bcrypt.hashpw(password_bytes, salt_bytes)
-    return hashed_bytes.decode("utf-8")
+from app.core.security import (
+    hash_plain_text_password_with_bcrypt,
+    verify_plain_password_against_bcrypt_hash,
+)
 
 
 def check_email_already_registered_in_database(
@@ -107,6 +98,39 @@ def fetch_paginated_user_accounts_from_database(
         .offset(pagination_offset)
     )
     return list(query_result.scalars().all())
+
+
+def fetch_user_account_by_email_address(
+    database_session_instance, email_address: str
+):
+    """Возвращает UserAccountModel по email или None."""
+    from sqlalchemy import select
+    from app.models.user_account import UserAccountModel
+
+    result = database_session_instance.execute(
+        select(UserAccountModel).where(
+            UserAccountModel.user_email_address == email_address
+        )
+    )
+    return result.scalars().first()
+
+
+def verify_credentials_and_return_user(
+    database_session_instance, email_address: str, plain_text_password: str
+):
+    """
+    Проверяет email и пароль. Возвращает UserAccountModel или None.
+    """
+    user_account = fetch_user_account_by_email_address(
+        database_session_instance, email_address
+    )
+    if user_account is None:
+        return None
+    if not verify_plain_password_against_bcrypt_hash(
+        plain_text_password, user_account.user_hashed_password_string
+    ):
+        return None
+    return user_account
 
 
 def convert_user_models_to_public_schemas(list_of_user_model_objects):

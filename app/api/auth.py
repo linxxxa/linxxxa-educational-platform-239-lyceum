@@ -1,19 +1,50 @@
 """
-Эндпоинты аутентификации: регистрация и вход пользователей.
+Эндпоинты аутентификации: регистрация, вход, JWT.
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
+from app.core.security import create_encrypted_access_token_string
 from app.database import get_database_session_generator
 from app.schemas.user import UserAccountCreate, UserAccountPublicInformation
 from app.services.auth_service import (
     perform_full_user_registration_flow,
     fetch_paginated_user_accounts_from_database,
     convert_user_models_to_public_schemas,
+    verify_credentials_and_return_user,
 )
 
 
 auth_router = APIRouter(prefix="/auth", tags=["Аутентификация"])
+
+
+@auth_router.post("/login")
+def authenticate_user_and_generate_token(
+    oauth2_password_request_form: OAuth2PasswordRequestForm = Depends(),
+    database_connection_session: Session = Depends(get_database_session_generator),
+):
+    """
+    Вход: email в поле username, пароль — в password.
+    Возвращает access_token (JWT) и token_type.
+    """
+    authenticated_user_account_object = verify_credentials_and_return_user(
+        database_connection_session,
+        oauth2_password_request_form.username,
+        oauth2_password_request_form.password,
+    )
+    if authenticated_user_account_object is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный email или пароль",
+        )
+    encrypted_access_token_string = create_encrypted_access_token_string(
+        authenticated_user_account_object.user_unique_identifier
+    )
+    return {
+        "access_token": encrypted_access_token_string,
+        "token_type": "bearer",
+    }
 
 
 @auth_router.post("/register", status_code=201)
