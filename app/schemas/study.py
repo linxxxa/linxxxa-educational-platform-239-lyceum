@@ -6,9 +6,15 @@ from pydantic import BaseModel, field_validator
 
 class UserAnswerSubmission(BaseModel):
     """
-    Ответ на карточку: ID карточки, Q (0–5), τ в секундах.
+    Ответ на карточку: ID карточки, признак корректности ответа,
+    уверенность и время раздумья.
+
+    По ТЗ Q (0–5) вычисляется в обработчике из:
+    - is_correct (был ли ответ верным),
+    - user_subjective_confidence_score (оценка уверенности пользователя 0–5).
     """
     target_card_unique_identifier: int
+    submitted_user_answer_is_correct: bool
     user_subjective_confidence_score: float
     response_thinking_time_seconds: float
 

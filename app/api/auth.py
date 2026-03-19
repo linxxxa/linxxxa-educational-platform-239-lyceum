@@ -22,7 +22,9 @@ auth_router = APIRouter(prefix="/auth", tags=["Аутентификация"])
 @auth_router.post("/login")
 def authenticate_user_and_generate_token(
     oauth2_password_request_form: OAuth2PasswordRequestForm = Depends(),
-    database_connection_session: Session = Depends(get_database_session_generator),
+    database_connection_session: Session = Depends(
+        get_database_session_generator
+    ),
 ):
     """
     Вход: email в поле username, пароль — в password.
@@ -38,16 +40,21 @@ def authenticate_user_and_generate_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный email или пароль",
         )
-    encrypted_access_token_string = create_encrypted_access_token_string(
-        authenticated_user_account_object.user_unique_identifier
+    encrypted_access_token_string = create_access_token_for_user_account(
+        authenticated_user_account_object.user_email_address
     )
-    return {"access_token": access_token_string, "token_type": "bearer"}
+    return {
+        "access_token": encrypted_access_token_string,
+        "token_type": "bearer",
+    }
 
 
 @auth_router.post("/register", status_code=201)
 def register_new_user_endpoint(
     user_registration_request_data: UserAccountCreate,
-    database_session_instance: Session = Depends(get_database_session_generator),
+    database_session_instance: Session = Depends(
+        get_database_session_generator
+    ),
 ):
     """
     Регистрация нового пользователя.
@@ -63,14 +70,18 @@ def register_new_user_endpoint(
     return {
         "message": "Пользователь успешно зарегистрирован",
         "user_unique_identifier": newly_created_user_object.user_unique_identifier,
-        "user_full_display_name": newly_created_user_object.user_full_display_name,
+        "user_full_display_name": (
+            newly_created_user_object.user_full_display_name
+        ),
         "user_email_address": newly_created_user_object.user_email_address,
     }
 
 
 @auth_router.get("/users", response_model=list[UserAccountPublicInformation])
 def get_all_registered_users_from_database(
-    database_session_instance: Session = Depends(get_database_session_generator),
+    database_session_instance: Session = Depends(
+        get_database_session_generator
+    ),
     pagination_limit: int = Query(default=50, ge=1, le=100),
     pagination_offset: int = Query(default=0, ge=0),
 ):
@@ -85,4 +96,6 @@ def get_all_registered_users_from_database(
             pagination_offset=pagination_offset,
         )
     )
-    return convert_user_models_to_public_schemas(list_of_registered_user_accounts)
+    return convert_user_models_to_public_schemas(
+        list_of_registered_user_accounts
+    )

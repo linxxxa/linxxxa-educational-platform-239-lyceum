@@ -10,8 +10,6 @@ from app.api.auth import auth_router
 from app.api.learning_topics import learning_topics_router
 from app.api.learning_cards import learning_cards_router
 from app.api.study_session import study_session_router
-
-DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 from app.database import (
     Base_Model_Declarative_Root,
     platform_database_engine,
@@ -19,6 +17,18 @@ from app.database import (
 from app.models.user_account import UserAccountModel
 from app.models.learning_topic import LearningTopicModel
 from app.models.learning_card import LearningCardModel  # Регистрация моделей для create_all
+from app.models.learning_interaction import LearningInteractionModel
+from app.models.user_card_progress import UserCardProgressModel
+
+DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
+
+models_for_metadata_registration = (
+    UserAccountModel,
+    LearningTopicModel,
+    LearningCardModel,
+    LearningInteractionModel,
+    UserCardProgressModel,
+)
 
 fastapi_application = FastAPI(title="ФМЛ 239 — Адаптивное обучение")
 

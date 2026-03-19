@@ -21,6 +21,13 @@ class LearningTopicModel(Base_Model_Declarative_Root):
     topic_display_name = Column(String, nullable=False)
     topic_description_text = Column(String, nullable=True)
     topic_entropy_complexity_value = Column(Float, default=0.0)
+
+    # Количество связанных тем (раздел 4.1 ТЗ).
+    related_topics_count = Column(Integer, default=0)
+
+    # Энтропийная сложность темы для адаптивности (раздел 4.1 ТЗ).
+    topic_entropy_value = Column(Float, default=0.0)
+
     parent_topic_reference_identifier = Column(
         Integer,
         ForeignKey("learning_topics.topic_unique_identifier"),
@@ -36,7 +43,10 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         backref="parent_topic",
         remote_side=[topic_unique_identifier],
     )
-    topic_owner = relationship("UserAccountModel", back_populates="owned_learning_topics")
+    topic_owner = relationship(
+        "UserAccountModel",
+        back_populates="owned_learning_topics",
+    )
     learning_cards_in_topic = relationship(
         "LearningCardModel", back_populates="parent_topic"
     )
