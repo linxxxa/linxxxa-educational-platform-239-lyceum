@@ -1,27 +1,147 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 
-export function Header() {
+interface HeaderProps {
+  className?: string;
+}
+
+function Header({ className }: HeaderProps) {
+  const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const burgerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const handler = () => setScrolled(window.scrollY > 10);
+    window.addEventListener("scroll", handler);
+    return () => window.removeEventListener("scroll", handler);
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const isInsideMenu = menuRef.current?.contains(target);
+      const isInsideBurger = burgerRef.current?.contains(target);
+      if (menuOpen && !isInsideMenu && !isInsideBurger) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
+
   return (
-    <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
-        <Link href="/" className="text-lg font-semibold">
-          ФМЛ 239
+    <header
+      className={`
+        fixed left-0 right-0 top-0 z-50
+        transition-all duration-200
+        ${scrolled
+          ? "border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950"
+          : "bg-transparent"}
+        ${className ?? ""}
+      `}
+    >
+      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-5">
+        {/* Лого */}
+        <Link href="/" className="flex items-center gap-2.5 no-underline">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[#2F3437]">
+            <span className="text-[10px] font-medium text-white">239</span>
+          </div>
+          <span className="text-[15px] font-medium text-neutral-900 dark:text-neutral-100">
+            EduLab
+          </span>
         </Link>
-        <nav className="flex items-center gap-6">
+
+        {/* Центральные ссылки (десктоп) */}
+        <nav className="hidden items-center gap-6 md:flex">
+          <Link
+            href="#about"
+            className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
+          >
+            О платформе
+          </Link>
+          <Link
+            href="#how"
+            className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
+          >
+            Как это работает
+          </Link>
+        </nav>
+
+        {/* Кнопки (десктоп) */}
+        <div className="hidden items-center gap-3 md:flex">
           <Link
             href="/login"
-            className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
           >
-            Вход
+            Войти
           </Link>
           <Link
             href="/register"
-            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            className="rounded-md bg-[#2F3437] px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity duration-150 hover:opacity-[0.85]"
           >
-            Регистрация
+            Начать бесплатно →
           </Link>
-        </nav>
+        </div>
+
+        {/* Бургер (мобайл) */}
+        <button
+          ref={burgerRef}
+          type="button"
+          className="text-neutral-500 md:hidden"
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-expanded={menuOpen}
+          aria-label="Открыть меню"
+        >
+          <div className="flex flex-col gap-1">
+            <span className="block h-px w-5 bg-current" />
+            <span className="block h-px w-5 bg-current" />
+            <span className="block h-px w-5 bg-current" />
+          </div>
+        </button>
       </div>
+
+      {/* Мобильное меню */}
+      {menuOpen && (
+        <div
+          ref={menuRef}
+          className="flex flex-col gap-3 border-b border-neutral-200 bg-white px-5 pb-4 dark:border-neutral-800 dark:bg-neutral-950 md:hidden animate-menu-fade-in"
+        >
+          <Link
+            href="#about"
+            onClick={() => setMenuOpen(false)}
+            className="py-1 text-[13px] text-neutral-500"
+          >
+            О платформе
+          </Link>
+          <Link
+            href="#how"
+            onClick={() => setMenuOpen(false)}
+            className="py-1 text-[13px] text-neutral-500"
+          >
+            Как это работает
+          </Link>
+          <Link
+            href="/login"
+            onClick={() => setMenuOpen(false)}
+            className="py-1 text-[13px] text-neutral-500"
+          >
+            Войти
+          </Link>
+          <Link
+            href="/register"
+            onClick={() => setMenuOpen(false)}
+            className="rounded-md bg-[#2F3437] px-3.5 py-2 text-center text-[13px] font-medium text-white"
+          >
+            Начать бесплатно →
+          </Link>
+        </div>
+      )}
     </header>
   );
 }
+
+export default Header;
+export { Header };
