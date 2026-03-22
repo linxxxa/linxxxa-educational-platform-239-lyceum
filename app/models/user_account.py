@@ -49,6 +49,7 @@ class UserAccountModel(Base_Model_Declarative_Root):
     # Статистика для Индекса Готовности (RI)
     average_response_time_seconds = Column(Float, default=0.0)     # Параметр τ
     knowledge_deviation_sigma = Column(Float, default=0.0)         # Параметр σ
+    last_calculated_readiness_index_ri = Column(Float, nullable=True)
 
     owned_learning_topics = relationship(
         "LearningTopicModel", back_populates="topic_owner"
@@ -58,7 +59,7 @@ class UserAccountModel(Base_Model_Declarative_Root):
     )
 
     owned_learning_interactions = relationship(
-        "LearningInteractionModel",
+        "LearningInteractionsModel",
         back_populates="interaction_owner_user_account",
     )
 

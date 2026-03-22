@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
 )
 from sqlalchemy.orm import relationship, synonym
@@ -25,27 +26,24 @@ class UserCardProgressModel(Base_Model_Declarative_Root):
         ForeignKey("user_accounts.user_unique_identifier"),
         primary_key=True,
     )
-    progress_id = synonym("progress_owner_user_account_id")
-    user_id = synonym("progress_owner_user_account_id")
     progress_target_card_unique_identifier = Column(
         Integer,
         ForeignKey("learning_cards.card_unique_identifier"),
         primary_key=True,
     )
-    card_id = synonym("progress_target_card_unique_identifier")
 
     progress_easiness_factor = Column(Float, nullable=False, default=1.3)
-    easiness_factor = synonym("progress_easiness_factor")
     easiness_factor_coefficient = synonym("progress_easiness_factor")
-
-    repetition_number = synonym("progress_interval_days")
     progress_interval_days = Column(Integer, nullable=False, default=1)
-    next_review_datetime = synonym("progress_next_review_date")
-    card_mastery_level = synonym("progress_mastery_level")
     progress_next_review_date = Column(DateTime, nullable=True, index=True)
     progress_mastery_level = Column(Float, nullable=False, default=0.0)
 
     __table_args__ = (
+        Index(
+            "ix_progress_user_id_next_review_date",
+            "progress_owner_user_account_id",
+            "progress_next_review_date",
+        ),
         CheckConstraint(
             "progress_easiness_factor >= 1.3 AND "
             "progress_easiness_factor <= 2.5",

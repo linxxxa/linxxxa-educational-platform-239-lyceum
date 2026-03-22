@@ -37,6 +37,7 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         Integer,
         ForeignKey("user_accounts.user_unique_identifier"),
         nullable=True,
+        index=True,
     )
     subtopics = relationship(
         "LearningTopicModel",
@@ -48,5 +49,8 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         back_populates="owned_learning_topics",
     )
     learning_cards_in_topic = relationship(
-        "LearningCardModel", back_populates="parent_topic"
+        "LearningCardModel",
+        back_populates="parent_topic",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

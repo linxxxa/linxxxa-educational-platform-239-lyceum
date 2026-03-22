@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import statistics
 from datetime import datetime, timedelta
@@ -30,9 +31,38 @@ from app.services.math_metrics import (
     calculate_learning_efficiency,
     calculate_readiness_index,
 )
+from app.services.user_analytics_service import refresh_user_global_stats
 
-
+logger = logging.getLogger(__name__)
 study_session_router = APIRouter(prefix="/study", tags=["Сессия обучения"])
+
+
+def _get_card_difficulty_level(learning_card_instance: LearningCardModel) -> int:
+    """
+    Извлекает difficulty_level из карточки.
+    Поддерживает difficulty_level (LearningCards) и difficulty_level_L (ИП).
+    """
+    return int(
+        getattr(
+            learning_card_instance,
+            "difficulty_level_L",
+            getattr(learning_card_instance, "difficulty_level", 1),
+        )
+    )
+
+
+def _get_topic_entropy_value_from_topic(topic_instance: object) -> float:
+    """
+    Извлекает topic_entropy_value из темы для расчёта SM-2.
+    Использует topic_entropy_value (ИП) или topic_entropy_complexity_value.
+    """
+    return float(
+        getattr(
+            topic_instance,
+            "topic_entropy_value",
+            getattr(topic_instance, "topic_entropy_complexity_value", 0.0),
+        )
+    )
 
 
 def _fetch_card_and_validate_ownership(
@@ -80,11 +110,14 @@ def submit_user_answer_endpoint(
     if updated_learning_card_instance is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
 
+    learning_card_difficulty_level_value = _get_card_difficulty_level(
+        updated_learning_card_instance
+    )
     remaining_user_cognitive_energy = (
         _apply_energy_update_in_redis_or_initialize(
             database_session_instance=database_connection_session,
             authorized_student_user_account=authorized_student_user_account,
-            learning_card_difficulty_level=updated_learning_card_instance.difficulty_level,
+            learning_card_difficulty_level=learning_card_difficulty_level_value,
             submitted_answer_is_correct=submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
         )
     )
@@ -117,9 +150,19 @@ def submit_user_answer_endpoint(
         submitted_answer_is_correct=submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
         submitted_user_subjective_confidence_score=submitted_answer_data_transfer_object.user_subjective_confidence_score,
     )
-    user_personal_forgetting_coefficient = _calculate_user_personal_forgetting_coefficient_lambda_i(
-        database_session_instance=database_connection_session,
-        authorized_student_user_account_identifier=authorized_student_user_account.user_unique_identifier,
+    topic_entropy_value_for_sm2 = _get_topic_entropy_value_from_topic(
+        updated_learning_card_instance.parent_topic
+    )
+    user_personal_forgetting_lambda_from_account = float(
+        getattr(
+            authorized_student_user_account,
+            "personal_forgetting_lambda",
+            getattr(
+                authorized_student_user_account,
+                "personal_lambda",
+                0.05,
+            ),
+        )
     )
 
     calculated_new_easiness_factor, repetition_interval_days_count = run_sm2_step(
@@ -132,8 +175,8 @@ def submit_user_answer_endpoint(
         ),
         repetition_sequence_number=updated_learning_card_instance.card_repetition_sequence_number,
         previous_interval_days_count=updated_learning_card_instance.card_last_interval_days,
-        calculated_topic_entropy_value=updated_learning_card_instance.parent_topic.topic_entropy_complexity_value,
-        user_personal_forgetting_coefficient=user_personal_forgetting_coefficient,
+        calculated_topic_entropy_value=topic_entropy_value_for_sm2,
+        user_personal_forgetting_coefficient=user_personal_forgetting_lambda_from_account,
     )
 
     updated_next_review_datetime, updated_topic_mastery_average_int, previous_topic_mastery_average_value = (
@@ -165,6 +208,27 @@ def submit_user_answer_endpoint(
         "next_review": updated_next_review_datetime.date(),
         "new_mastery": updated_topic_mastery_average_int,
     }
+
+
+@study_session_router.post("/refresh-user-stats")
+def refresh_user_global_stats_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    POST /study/refresh-user-stats.
+    Агрегирует данные из interactions и progress, обновляет
+    total_learning_hours и last_calculated_readiness_index_ri в user_accounts.
+    """
+    success = refresh_user_global_stats(
+        database_session_instance=database_connection_session,
+        target_user_account_identifier=authorized_student_user_account.user_unique_identifier,
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return {"status": "ok", "message": "Глобальная статистика обновлена"}
 
 
 def _retrieve_or_initialize_user_energy_value_from_redis(
@@ -221,8 +285,10 @@ def _apply_energy_update_in_redis_or_initialize(
     submitted_answer_is_correct: bool,
 ) -> float:
     """
-    Шаг Redis: E → update_energy → persist.
-    Энтропия/SM-2 на этом шаге не участвуют — только стоимость ответа.
+    Обновляет когнитивную энергию в Redis (или user_accounts при отсутствии Redis).
+
+    Использует difficulty_level_L из LearningCards и is_correct.
+    Затрагивает: Redis (ключ session:{user_id}:energy) или user_accounts.
     """
     current_energy_value, redis_client_instance = (
         _retrieve_or_initialize_user_energy_value_from_redis(
@@ -231,6 +297,15 @@ def _apply_energy_update_in_redis_or_initialize(
     )
     remaining_user_cognitive_energy = update_energy(
         current_energy_value,
+        learning_card_difficulty_level,
+        submitted_answer_is_correct,
+    )
+    logger.info(
+        "Когнитивная энергия обновлена: user=%s, E_old=%.2f, E_new=%.2f, "
+        "difficulty=%s, is_correct=%s",
+        authorized_student_user_account.user_unique_identifier,
+        current_energy_value,
+        remaining_user_cognitive_energy,
         learning_card_difficulty_level,
         submitted_answer_is_correct,
     )
@@ -379,8 +454,15 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
     repetition_interval_days_count: int,
 ) -> tuple[datetime, int, float]:
     """
-    Записывает Interactions, обновляет Progress и пересчитывает mastery темы.
-    Возвращает: (next_review_datetime, topic_mastery_average_int, topic_mastery_average_float_before).
+    Записывает user_interaction_history_log и обновляет UserCardProgress.
+
+    Затрагиваемые таблицы:
+    - interactions (запись): добавление лога ответа (response_time_ms, is_correct).
+    - progress (запись): easiness_factor_ef, next_review_datetime, mastery_level.
+    - learning_cards (запись): обновление card_easiness_factor, card_next_review_datetime.
+    - user_accounts (запись): total_learning_hours.
+
+    Возвращает: (next_review_datetime, topic_mastery_average_int, previous).
     """
     time_spent_on_thinking_seconds_value = float(time_spent_on_thinking_seconds)
     response_time_ms_value = int(time_spent_on_thinking_seconds_value * 1000.0)
@@ -434,6 +516,11 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
         ),
     )
 
+    previous_ef_value = (
+        float(existing_progress_record.progress_easiness_factor)
+        if existing_progress_record is not None
+        else float(updated_learning_card_instance.card_easiness_factor_ef)
+    )
     if existing_progress_record is None:
         existing_progress_record = UserCardProgressModel(
             progress_owner_user_account_id=authorized_student_user_account.user_unique_identifier,
@@ -444,6 +531,14 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
     )
     existing_progress_record.progress_interval_days = int(
         repetition_interval_days_count
+    )
+    logger.info(
+        "Коэффициент лёгкости (easiness_factor_coefficient) обновлён: "
+        "user=%s, card=%s, EF_old=%.3f, EF_new=%.3f",
+        authorized_student_user_account.user_unique_identifier,
+        updated_learning_card_instance.card_unique_identifier,
+        previous_ef_value,
+        calculated_new_easiness_factor,
     )
     existing_progress_record.progress_next_review_date = next_review_datetime_value
     existing_progress_record.progress_mastery_level = float(
@@ -489,81 +584,27 @@ def _calculate_eta_and_ri_background_task(
     final_mastery: float,
     session_duration_hours: float,
 ) -> None:
-    """Фоновая задача: считает η и RI и обновляет агрегаты пользователя."""
+    """
+    Фоновая задача: вызывает refresh_user_global_stats для агрегации
+    из interactions и progress в user_accounts (total_learning_hours,
+    last_calculated_readiness_index_ri).
+    """
     database_session_background = next(get_database_session_generator())
     try:
-        mastery_levels_query_result = (
-            database_session_background.execute(
-                select(
-                    func.avg(UserCardProgressModel.progress_mastery_level)
-                )
-                .select_from(UserCardProgressModel)
-                .join(
-                    LearningCardModel,
-                    UserCardProgressModel.progress_target_card_unique_identifier
-                    == LearningCardModel.card_unique_identifier,
-                )
-                .group_by(LearningCardModel.parent_topic_reference_id)
-                .where(
-                    UserCardProgressModel.progress_owner_user_account_id
-                    == authorized_student_user_account_identifier
-                )
-            )
-        )
-        mastery_levels_list = [
-            float(v)
-            for v in mastery_levels_query_result.scalars().all()
-            if v is not None
-        ]
-
-        total_response_time_ms_query_result = (
-            database_session_background.execute(
-                select(
-                    func.sum(LearningInteractionModel.interaction_response_time_ms)
-                ).where(
-                    LearningInteractionModel.interaction_owner_user_account_id
-                    == authorized_student_user_account_identifier
-                )
-            )
-        )
-        total_response_time_ms_value = (
-            total_response_time_ms_query_result.scalar_one_or_none() or 0
-        )
-        total_hours_value = float(total_response_time_ms_value) / 3600000.0
-
-        calculated_readiness_index_value = calculate_readiness_index(
-            mastery_levels=mastery_levels_list,
-            total_hours=total_hours_value,
-        )
-        calculated_learning_efficiency_value = calculate_learning_efficiency(
+        calculated_session_efficiency_coefficient = calculate_learning_efficiency(
             initial_mastery=initial_mastery,
             final_mastery=final_mastery,
             session_duration_hours=session_duration_hours,
             unique_topics_count=1,
         )
-
-        user_record = (
-            database_session_background.execute(
-                select(UserAccountModel).where(
-                    UserAccountModel.user_unique_identifier
-                    == authorized_student_user_account_identifier
-                )
-            )
-            .scalars()
-            .first()
+        logger.info(
+            "Расчёт эффективности сессии: user=%s, η=%.4f",
+            authorized_student_user_account_identifier,
+            calculated_session_efficiency_coefficient,
         )
-        if user_record is not None:
-            user_record.global_mastery_coefficient = (
-                sum(mastery_levels_list) / float(len(mastery_levels_list))
-                if mastery_levels_list
-                else 0.0
-            )
-            user_record.knowledge_deviation_sigma = (
-                statistics.pstdev(mastery_levels_list)
-                if len(mastery_levels_list) > 1
-                else 0.0
-            )
-            database_session_background.add(user_record)
-            database_session_background.commit()
+        refresh_user_global_stats(
+            database_session_instance=database_session_background,
+            target_user_account_identifier=authorized_student_user_account_identifier,
+        )
     finally:
         database_session_background.close()

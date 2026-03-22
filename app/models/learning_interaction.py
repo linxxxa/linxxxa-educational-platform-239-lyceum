@@ -2,13 +2,10 @@
 Модель логов взаимодействий пользователя с карточками (раздел 4.1 ТЗ).
 
 Таблица Interactions:
-- is_correct (верный/неверный ответ),
-- response_time_ms (время раздумья),
-- user_confidence_level (легко/средне/тяжело),
+- interaction_is_correct (верный/неверный ответ),
+- interaction_response_time_ms / response_thinking_time_ms (τ, время раздумья),
+- interaction_subjective_confidence_level (легко/средне/тяжело),
 - interaction_timestamp (момент ответа).
-
-Для совместимости с текущим кодом оставлены исходные имена колонок, а требуемые
-в ИП поля реализованы через `synonym`.
 """
 
 from __future__ import annotations
@@ -46,31 +43,26 @@ class LearningInteractionsModel(Base_Model_Declarative_Root):
     interaction_unique_identifier = Column(
         Integer, primary_key=True, index=True
     )
-    interaction_id = synonym("interaction_unique_identifier")
 
-    # Пользователь и карточка (оставлены прежние DB-столбцы).
     interaction_owner_user_account_id = Column(
         Integer,
         ForeignKey("user_accounts.user_unique_identifier"),
         nullable=False,
         index=True,
     )
-    user_id = synonym("interaction_owner_user_account_id")
-
     interaction_target_card_unique_identifier = Column(
         Integer,
-        ForeignKey("learning_cards.card_unique_identifier"),
-        nullable=False,
+        ForeignKey(
+            "learning_cards.card_unique_identifier",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
         index=True,
     )
-    card_id = synonym("interaction_target_card_unique_identifier")
 
-    # Логирование качества ответа.
     interaction_is_correct = Column(Boolean, nullable=False)
-    is_correct = synonym("interaction_is_correct")
-
     interaction_response_time_ms = Column(Integer, nullable=False)
-    response_time_ms = synonym("interaction_response_time_ms")
+    response_thinking_time_ms = synonym("interaction_response_time_ms")
 
     interaction_subjective_confidence_level = Column(
         SQLEnum(UserSubjectiveConfidenceLevelEnum),

@@ -85,7 +85,9 @@ def _calculate_topic_entropy_value_from_card(
     learning_card_instance: LearningCardModel,
 ) -> float:
     """Получает H(T) из связанной темы карточки."""
-    topic_instance = learning_card_instance.parent_topic
+    topic_instance: LearningTopicModel | None = (
+        learning_card_instance.parent_topic
+    )
     if topic_instance is None:
         return 0.0
     if getattr(topic_instance, "topic_entropy_value", None) is not None:

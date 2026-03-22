@@ -45,6 +45,7 @@ class LearningCardModel(Base_Model_Declarative_Root):
         Integer,
         ForeignKey("learning_topics.topic_unique_identifier"),
         nullable=False,
+        index=True,
     )
 
     # Поле card_question_text_payload хранит LaTeX-формулы (длинный текст).
@@ -81,7 +82,7 @@ class LearningCardModel(Base_Model_Declarative_Root):
     )
 
     learning_card_interactions = relationship(
-        "LearningInteractionModel",
+        "LearningInteractionsModel",
         back_populates="interaction_target_learning_card",
     )
 
