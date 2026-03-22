@@ -1,8 +1,9 @@
+import RegisterForm from "@/components/auth/RegisterForm";
+
 export default function RegisterPage() {
   return (
-    <main className="flex min-h-[80vh] flex-col items-center justify-center px-4">
-      <h1 className="mb-6 text-2xl font-semibold">Регистрация</h1>
-      <p className="text-zinc-600">Страница регистрации</p>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-neutral-50 px-4 dark:bg-neutral-950">
+      <RegisterForm />
     </main>
   );
 }

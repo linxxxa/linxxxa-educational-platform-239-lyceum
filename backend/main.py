@@ -6,19 +6,21 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.auth import auth_router
-from app.api.learning_topics import learning_topics_router
-from app.api.learning_cards import learning_cards_router
-from app.api.study_session import study_session_router
 from app.database import (
     Base_Model_Declarative_Root,
     platform_database_engine,
 )
+# Импорт моделей ДО роутеров — иначе SQLAlchemy не разрешит relationship
 from app.models.user_account import UserAccountModel
 from app.models.learning_topic import LearningTopicModel
-from app.models.learning_card import LearningCardModel  # Регистрация моделей для create_all
+from app.models.learning_card import LearningCardModel
 from app.models.learning_interaction import LearningInteractionModel
 from app.models.user_card_progress import UserCardProgressModel
+
+from app.api.auth import auth_router
+from app.api.learning_topics import learning_topics_router
+from app.api.learning_cards import learning_cards_router
+from app.api.study_session import study_session_router
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 

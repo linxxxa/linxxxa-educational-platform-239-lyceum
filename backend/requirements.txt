@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+python-multipart
 sqlalchemy
 psycopg2-binary
 bcrypt<4.1.0
