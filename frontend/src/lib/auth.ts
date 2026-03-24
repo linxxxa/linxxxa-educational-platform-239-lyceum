@@ -37,12 +37,31 @@ export async function login(
   return response.json() as Promise<AuthTokenResponse>;
 }
 
+const AUTH_CHANGE_EVENT = "edulab-auth-change";
+
+function notifyAuthChange(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
+  }
+}
+
 /**
  * Сохранение токена в localStorage (для клиентского использования).
  */
 export function saveToken(token: string): void {
   if (typeof window !== "undefined") {
     window.localStorage.setItem("access_token", token);
+    notifyAuthChange();
+  }
+}
+
+/**
+ * Удаляет токен (выход).
+ */
+export function clearToken(): void {
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem("access_token");
+    notifyAuthChange();
   }
 }
 

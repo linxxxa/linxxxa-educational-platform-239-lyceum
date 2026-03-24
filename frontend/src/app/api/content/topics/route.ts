@@ -1,0 +1,24 @@
+import { NextRequest, NextResponse } from "next/server";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+export async function GET(req: NextRequest) {
+  const auth = req.headers.get("authorization");
+  if (!auth?.startsWith("Bearer ")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const url = new URL(req.url);
+  const sid = url.searchParams.get("parent_subject_reference_id");
+  const q =
+    sid != null && sid !== ""
+      ? `?parent_subject_reference_id=${encodeURIComponent(sid)}`
+      : "";
+  const res = await fetch(`${API_BASE}/content/topics${q}`, {
+    headers: { Authorization: auth },
+  });
+  const text = await res.text();
+  return new NextResponse(text, {
+    status: res.status,
+    headers: { "Content-Type": "application/json" },
+  });
+}

@@ -1,8 +1,9 @@
+import LoginForm from "@/components/auth/LoginForm";
+
 export default function LoginPage() {
   return (
-    <main className="flex min-h-[80vh] flex-col items-center justify-center px-4">
-      <h1 className="mb-6 text-2xl font-semibold">Вход</h1>
-      <p className="text-zinc-600">Страница авторизации</p>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-neutral-50 px-4 dark:bg-neutral-950">
+      <LoginForm />
     </main>
   );
 }
