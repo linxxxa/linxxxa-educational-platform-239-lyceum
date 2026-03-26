@@ -2,7 +2,6 @@
 
 import { BlockMath } from "react-katex";
 import type { Card } from "./types";
-import DifficultyDots from "./DifficultyDots";
 
 interface Props {
   card: Card;
@@ -29,7 +28,6 @@ export default function CardQuestion({ card, onShowAnswer }: Props) {
         <span className="text-[12px] capitalize text-neutral-500">
           {card.card_type}
         </span>
-        <DifficultyDots level={card.difficulty_level} />
       </div>
 
       <p className="mb-6 text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">

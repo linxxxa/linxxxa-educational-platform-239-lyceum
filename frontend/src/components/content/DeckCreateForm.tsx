@@ -18,7 +18,6 @@ function emptyCard(): CardPayloadItem {
   return {
     card_content_question_latex: "",
     card_content_answer_latex: "",
-    card_difficulty_level_coefficient: 3,
     card_type_category: "CONCEPT",
   };
 }

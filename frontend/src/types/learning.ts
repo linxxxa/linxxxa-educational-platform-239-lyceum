@@ -20,7 +20,6 @@ export type CardTypeCategoryProtocol = "CONCEPT" | "FORMULA" | "TASK";
 export interface CardPayloadItem {
   card_content_question_latex: string;
   card_content_answer_latex: string;
-  card_difficulty_level_coefficient: number;
   card_type_category: CardTypeCategoryProtocol;
 }
 

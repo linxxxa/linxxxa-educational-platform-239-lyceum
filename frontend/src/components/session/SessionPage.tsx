@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { getToken } from "@/lib/auth";
 import CardAnswer from "./CardAnswer";
 import CardQuestion from "./CardQuestion";
+import DecksInSession from "./DecksInSession";
 import EmptyState from "./EmptyState";
 import SessionFinished from "./SessionFinished";
 import SessionProgress from "./SessionProgress";
@@ -144,12 +145,6 @@ export default function SessionPage() {
   if (phase === "loading") {
     return <LoadingCard />;
   }
-  if (phase === "empty") {
-    return <EmptyState />;
-  }
-  if (phase === "finished") {
-    return <SessionFinished session={session} />;
-  }
 
   return (
     <div className="flex min-h-screen flex-col bg-neutral-50 dark:bg-neutral-950">
@@ -163,6 +158,10 @@ export default function SessionPage() {
         />
       )}
 
+      <div id="decks" className="pt-3">
+        <DecksInSession />
+      </div>
+
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-[520px]">
           {phase === "question" && card && (
@@ -171,6 +170,8 @@ export default function SessionPage() {
           {phase === "answer" && card && (
             <CardAnswer card={card} onConfidence={handleConfidence} />
           )}
+          {phase === "empty" && <EmptyState />}
+          {phase === "finished" && <SessionFinished session={session} />}
         </div>
       </div>
     </div>

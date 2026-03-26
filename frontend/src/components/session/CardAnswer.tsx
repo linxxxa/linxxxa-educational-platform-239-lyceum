@@ -1,7 +1,6 @@
 "use client";
 
 import ConfidenceButtons from "./ConfidenceButtons";
-import DifficultyDots from "./DifficultyDots";
 import type { Card } from "./types";
 
 interface Props {
@@ -16,7 +15,6 @@ export default function CardAnswer({ card, onConfidence }: Props) {
         <span className="text-[12px] capitalize text-neutral-500">
           {card.card_type}
         </span>
-        <DifficultyDots level={card.difficulty_level} />
       </div>
 
       <p className="mb-5 text-[15px] leading-relaxed text-neutral-400 dark:text-neutral-500">

@@ -86,7 +86,7 @@ function Header({ className }: HeaderProps) {
           {authed ? (
             <>
               <Link
-                href="/dashboard/topics"
+                href="/dashboard#decks"
                 className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
               >
                 Колоды
@@ -163,7 +163,7 @@ function Header({ className }: HeaderProps) {
           {authed ? (
             <>
               <Link
-                href="/dashboard/topics"
+                href="/dashboard#decks"
                 onClick={() => setMenuOpen(false)}
                 className="py-1 text-[13px] text-neutral-500"
               >

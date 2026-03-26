@@ -71,8 +71,6 @@ export function CardSlotEditor({
   errors,
   onChange,
 }: CardSlotEditorProps) {
-  const difficulty = card.card_difficulty_level_coefficient;
-
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -100,31 +98,6 @@ export function CardSlotEditor({
                 )
               )}
             </select>
-          </div>
-          <div className="flex items-center gap-0.5" role="group" aria-label="Сложность 1–5">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() =>
-                  onChange(index, {
-                    card_difficulty_level_coefficient: n,
-                  })
-                }
-                className={`rounded px-0.5 text-[18px] leading-none transition-colors ${
-                  n <= difficulty
-                    ? "text-amber-500 hover:text-amber-400"
-                    : "text-neutral-200 hover:text-neutral-300 dark:text-neutral-600 dark:hover:text-neutral-500"
-                }`}
-                aria-pressed={n <= difficulty}
-                aria-label={`Сложность ${n} из 5`}
-              >
-                ★
-              </button>
-            ))}
-            <span className="ml-1 w-4 text-[12px] text-neutral-600 dark:text-neutral-400">
-              {difficulty}
-            </span>
           </div>
         </div>
       </div>
