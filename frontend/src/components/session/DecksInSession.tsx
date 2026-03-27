@@ -49,15 +49,15 @@ export default function DecksInSession() {
 
   return (
     <div className="mx-auto w-full max-w-[720px] px-4">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-[var(--font-geist-sans)] text-base font-semibold tracking-[-0.02em] text-neutral-900 dark:text-neutral-100">
           Колоды
         </h3>
         <Link
           href="/dashboard/topics"
           className="text-[12px] text-neutral-500 underline underline-offset-2 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
         >
-          Управлять →
+          Все темы →
         </Link>
       </div>
 
@@ -74,42 +74,44 @@ export default function DecksInSession() {
           Колод пока нет. Создайте первую на странице тем.
         </p>
       ) : (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2">
           {topics.map((t) => (
             <div
               key={t.topic_unique_identifier}
-              className="flex items-center justify-between rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-3 dark:border-[#27272A] dark:bg-[#18181B]"
+              className="flex flex-col gap-3 rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] px-4 py-3 dark:border-[#27272A] dark:bg-[#18181B]"
             >
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                <div className="truncate font-[var(--font-geist-sans)] text-sm font-semibold text-neutral-900 dark:text-neutral-100">
                   {t.topic_display_name}
                 </div>
-                <div className="text-xs text-neutral-500">
-                  {t.is_public_visibility ? "Публичная" : "Приватная"} · связей:{" "}
-                  {t.related_topics_count}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-md border border-[#E4E4E7] bg-white px-2 py-0.5 font-[var(--font-geist-mono)] text-[10px] tabular-nums text-neutral-600 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-400">
+                    Связей: {t.related_topics_count}
+                  </span>
+                  <span className="rounded-md border border-[#E4E4E7] bg-white px-2 py-0.5 text-[10px] text-neutral-500 dark:border-[#27272A] dark:bg-[#09090B]">
+                    {t.is_public_visibility ? "Публичная" : "Приватная"}
+                  </span>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#E4E4E7] pt-3 dark:border-[#27272A]">
+                <Link
+                  href={`/study/${t.topic_unique_identifier}`}
+                  className="inline-flex min-h-[36px] items-center justify-center rounded-md bg-[#2F3437] px-4 py-2 text-sm font-medium text-white hover:bg-[#1f2326]"
+                  title="Начать повторение"
+                >
+                  Повторить
+                </Link>
                 <Link
                   href={`/dashboard/topics?focus=${t.topic_unique_identifier}`}
-                  className="rounded-md border border-[#E4E4E7] bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  title="Управлять колодой"
+                  className="text-[12px] text-neutral-500 underline-offset-2 hover:text-neutral-900 hover:underline dark:text-neutral-400 dark:hover:text-neutral-100"
                 >
                   Управлять
                 </Link>
                 <Link
                   href={`/dashboard/topics/${t.topic_unique_identifier}/cards/add`}
-                  className="rounded-md border border-[#E4E4E7] bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  title="Добавить карточки"
+                  className="text-[12px] text-neutral-500 underline-offset-2 hover:text-neutral-900 hover:underline dark:text-neutral-400 dark:hover:text-neutral-100"
                 >
                   + Карточки
-                </Link>
-                <Link
-                  href={`/study/${t.topic_unique_identifier}`}
-                  className="rounded-md bg-[#2F3437] px-3 py-1.5 text-xs font-medium text-white"
-                  title="Начать повторение"
-                >
-                  Повторить →
                 </Link>
               </div>
             </div>
@@ -119,4 +121,3 @@ export default function DecksInSession() {
     </div>
   );
 }
-

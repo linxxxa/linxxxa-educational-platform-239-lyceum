@@ -8,9 +8,11 @@ import { useAuthState } from "@/hooks/useAuthState";
 
 interface HeaderProps {
   className?: string;
+  /** Ссылки Колоды → /dashboard/decks, Учёба → /dashboard/session */
+  variant?: "default" | "dashboard";
 }
 
-function Header({ className }: HeaderProps) {
+function Header({ className, variant = "default" }: HeaderProps) {
   const router = useRouter();
   const authed = useAuthState();
   const [mounted, setMounted] = useState(false);
@@ -19,7 +21,12 @@ function Header({ className }: HeaderProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const burgerRef = useRef<HTMLButtonElement>(null);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/session", { method: "DELETE" });
+    } catch {
+      /* ignore */
+    }
     clearToken();
     setMenuOpen(false);
     router.push("/");
@@ -89,27 +96,51 @@ function Header({ className }: HeaderProps) {
         {/* Кнопки (десктоп) */}
         <div className="hidden items-center gap-3 md:flex">
           {mounted && authed ? (
-            <>
-              <Link
-                href="/dashboard#decks"
-                className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
-              >
-                Колоды
-              </Link>
-              <Link
-                href="/dashboard"
-                className="rounded-md bg-[#2F3437] px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity duration-150 hover:opacity-[0.85]"
-              >
-                Учёба →
-              </Link>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
-              >
-                Выйти
-              </button>
-            </>
+            variant === "dashboard" ? (
+              <>
+                <Link
+                  href="/dashboard/decks"
+                  className="text-[13px] text-neutral-500 transition-colors hover:text-neutral-900 dark:hover:text-neutral-100"
+                >
+                  Колоды
+                </Link>
+                <Link
+                  href="/dashboard/session"
+                  className="rounded-md bg-[#2F3437] px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-[0.85]"
+                >
+                  Учёба →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  className="text-[13px] text-neutral-500 transition-colors hover:text-neutral-900 dark:hover:text-neutral-100"
+                >
+                  Выйти
+                </button>
+              </>
+            ) : (
+              <>
+                <Link
+                  href="/dashboard#decks"
+                  className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
+                >
+                  Колоды
+                </Link>
+                <Link
+                  href="/dashboard"
+                  className="rounded-md bg-[#2F3437] px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity duration-150 hover:opacity-[0.85]"
+                >
+                  Учёба →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
+                >
+                  Выйти
+                </button>
+              </>
+            )
           ) : (
             <>
               <Link
@@ -166,29 +197,55 @@ function Header({ className }: HeaderProps) {
             Как это работает
           </Link>
           {mounted && authed ? (
-            <>
-              <Link
-                href="/dashboard#decks"
-                onClick={() => setMenuOpen(false)}
-                className="py-1 text-[13px] text-neutral-500"
-              >
-                Колоды
-              </Link>
-              <Link
-                href="/dashboard"
-                onClick={() => setMenuOpen(false)}
-                className="rounded-md bg-[#2F3437] px-3.5 py-2 text-center text-[13px] font-medium text-white"
-              >
-                Учёба →
-              </Link>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="py-1 text-left text-[13px] text-neutral-500"
-              >
-                Выйти
-              </button>
-            </>
+            variant === "dashboard" ? (
+              <>
+                <Link
+                  href="/dashboard/decks"
+                  onClick={() => setMenuOpen(false)}
+                  className="py-1 text-[13px] text-neutral-500"
+                >
+                  Колоды
+                </Link>
+                <Link
+                  href="/dashboard/session"
+                  onClick={() => setMenuOpen(false)}
+                  className="rounded-md bg-[#2F3437] px-3.5 py-2 text-center text-[13px] font-medium text-white"
+                >
+                  Учёба →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  className="py-1 text-left text-[13px] text-neutral-500"
+                >
+                  Выйти
+                </button>
+              </>
+            ) : (
+              <>
+                <Link
+                  href="/dashboard#decks"
+                  onClick={() => setMenuOpen(false)}
+                  className="py-1 text-[13px] text-neutral-500"
+                >
+                  Колоды
+                </Link>
+                <Link
+                  href="/dashboard"
+                  onClick={() => setMenuOpen(false)}
+                  className="rounded-md bg-[#2F3437] px-3.5 py-2 text-center text-[13px] font-medium text-white"
+                >
+                  Учёба →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  className="py-1 text-left text-[13px] text-neutral-500"
+                >
+                  Выйти
+                </button>
+              </>
+            )
           ) : (
             <>
               <Link

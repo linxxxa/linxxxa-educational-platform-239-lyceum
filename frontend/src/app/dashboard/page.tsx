@@ -1,5 +1,5 @@
-import SessionPage from "@/components/session/SessionPage";
+import DashboardPage from "@/components/dashboard/DashboardPage";
 
-export default function DashboardPage() {
-  return <SessionPage />;
+export default function Dashboard() {
+  return <DashboardPage />;
 }

@@ -10,6 +10,27 @@ from __future__ import annotations
 import math
 import statistics
 
+# Flashcard Engine 239 — расход энергии E (динамика по τ и Q)
+ENERGY_DRAIN_ALPHA = 2.0
+ENERGY_DRAIN_BETA = 1.5
+# Пороги когнитивной нагрузки по времени ответа τ (мс)
+RESPONSE_TIME_AUTOMATIC_MS = 2000.0
+RESPONSE_TIME_HIGH_LOAD_MS = 15000.0
+
+
+def _binary_outcome_entropy_bits(probability_error: float) -> float:
+    """
+    Энтропия Шеннона для бинарного исхода {ошибка / верно} с P(ошибка)=p.
+
+    При отсутствии данных берём p=0.5 — это максимум неопределённости (1 бит
+    на подтему), а не заниженное значение -p·log2(p).
+    """
+    p = float(probability_error)
+    if p <= 0.0 or p >= 1.0:
+        return 0.0
+    q = 1.0 - p
+    return -(p * math.log2(p) + q * math.log2(q))
+
 
 def calculate_topic_entropy(
     error_rates: list[float],
@@ -19,22 +40,18 @@ def calculate_topic_entropy(
     """
     Рассчитывает сложность темы H(T).
 
-    Формула:
-      H(T) = -Σ(p_i * log2(p_i)) + α * C
+    По ИП для каждой подтемы (вероятность ошибки p_i) вклад — бинарная
+    энтропия -p_i·log2(p_i) - (1-p_i)·log2(1-p_i). При отсутствии данных
+    p_i = 0.5 → максимальная неопределённость по этой подтеме.
 
-    Обработка граничных случаев:
-    - Если по теме нет ответов, то p_i принимается равным 0.5.
-    - Если p_i == 0 или p_i == 1, то слагаемое
-      p_i * log2(p_i) считается равным 0.
+    Итог: H(T) = Σ h_i + α·C, где C — число связей (концептов).
     """
     probabilities_list = error_rates if error_rates else [0.5]
-    entropy_sum_part = 0.0
+    entropy_bits_sum = 0.0
     for probability_p_i in probabilities_list:
-        if probability_p_i <= 0.0 or probability_p_i >= 1.0:
-            continue
-        entropy_sum_part += probability_p_i * math.log2(probability_p_i)
+        entropy_bits_sum += _binary_outcome_entropy_bits(probability_p_i)
     calculated_topic_entropy_value = (
-        -entropy_sum_part + alpha * connections_count
+        entropy_bits_sum + alpha * float(connections_count)
     )
     return max(0.0, calculated_topic_entropy_value)
 
@@ -71,31 +88,31 @@ def update_energy(
     """
     Обновляет когнитивную энергию пользователя E после ответа карточки.
 
-    По 239-протоколу "статическая сложность" карточки больше не используется.
-    Сложность динамически определяется временем ответа τ и уверенностью Q.
+    Стоимость ответа не зависит от статической сложности карточки (L_card);
+    только время раздумья τ (мс) и субъективная уверенность Q (0–5).
 
     Строгая динамика по 239-протоколу:
     - energy_drain = alpha * log(response_time_ms) + beta * (5 - Q)
     - alpha = 2, beta = 1.5
     - Если τ < 2000мс: низкая когнитивная нагрузка → снижаем drain
-    - Если τ > 15000мс: высокая нагрузка → увеличиваем drain даже при верном ответе
+    - Если τ > 15000мс: высокая нагрузка → увеличиваем drain
+      даже при верном ответе
     - Если ответ неверный: drain *= 1.5
     """
-    alpha_value = 2.0
-    beta_value = 1.5
-
     response_time_ms_value = max(1.0, float(response_thinking_time_ms))
     q_value = max(0.0, min(5.0, float(user_subjective_confidence_score_q)))
 
-    # energy_drain: логарифмическая шкала времени + неуверенность (5 - Q)
-    time_term = alpha_value * math.log(response_time_ms_value)
-    uncertainty_term = beta_value * (5.0 - q_value)
-    calculated_interaction_energy_drain = max(0.0, time_term + uncertainty_term)
+    # energy_drain = α·log(τ) + β·(5 − Q)
+    time_term = ENERGY_DRAIN_ALPHA * math.log(response_time_ms_value)
+    uncertainty_term = ENERGY_DRAIN_BETA * (5.0 - q_value)
+    calculated_interaction_energy_drain = max(
+        0.0, time_term + uncertainty_term
+    )
 
-    # τ-thresholds: low/high cognitive load modifiers
-    if response_time_ms_value < 2000.0:
+    # τ: «автоматический» ответ / высокая нагрузка
+    if response_time_ms_value < RESPONSE_TIME_AUTOMATIC_MS:
         calculated_interaction_energy_drain *= 0.5
-    if response_time_ms_value > 15000.0:
+    if response_time_ms_value > RESPONSE_TIME_HIGH_LOAD_MS:
         calculated_interaction_energy_drain *= 1.5
     if not is_correct:
         calculated_interaction_energy_drain *= 1.5

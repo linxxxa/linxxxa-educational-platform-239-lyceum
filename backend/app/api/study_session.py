@@ -1142,8 +1142,9 @@ def dashboard_insights_endpoint(
     """
     GET /study/dashboard-insights.
     Возвращает:
-    - readiness_index_ri и дневной дельта-прирост;
-    - список "слабых тем" (высокая энтропия + низкое mastery).
+    - readiness_index_ri (0..1000), readiness_index_view (RI/10, 0..100);
+    - дневной дельта-прирост;
+    - список «слабых тем» (высокая энтропия + низкое mastery).
     """
     user_id = authorized_student_user_account.user_unique_identifier
 
@@ -1156,6 +1157,10 @@ def dashboard_insights_endpoint(
 
     readiness_index_ri_value = float(
         authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    )
+    # Шкала 0–100 для UI: RI_view = RI / 10 (модель RI ∈ [0..1000]).
+    readiness_index_view_value = max(
+        0.0, min(100.0, readiness_index_ri_value / 10.0)
     )
 
     # Простой daily delta: баланс правильных/неправильных ответов за 24ч.
@@ -1228,22 +1233,25 @@ def dashboard_insights_endpoint(
         )
         .order_by(
             func.coalesce(
-                LearningTopicModel.topic_entropy_value,
-                LearningTopicModel.topic_entropy_complexity_value,
+                func.avg(UserCardProgressModel.progress_mastery_level),
                 0.0,
-            ).desc(),
-            func.coalesce(func.avg(UserCardProgressModel.progress_mastery_level), 0.0).asc(),
+            ).asc(),
         )
-        .limit(6)
+        .limit(24)
     )
     weak_topics_rows = database_connection_session.execute(weak_topics_query).all()
 
     weak_topics = []
     for row in weak_topics_rows:
-        entropy_value = float(
-            row.topic_entropy_value
-            if row.topic_entropy_value is not None
-            else row.topic_entropy_complexity_value or 0.0
+        topic_model = database_connection_session.get(
+            LearningTopicModel, int(row.topic_unique_identifier)
+        )
+        if topic_model is None:
+            continue
+        entropy_value = _calculate_dynamic_topic_entropy_value_from_history(
+            database_session_instance=database_connection_session,
+            user_id=user_id,
+            topic_instance=topic_model,
         )
         avg_mastery_value = float(row.avg_mastery or 0.0)
         weak_topics.append(
@@ -1255,10 +1263,333 @@ def dashboard_insights_endpoint(
             }
         )
 
+    weak_topics.sort(key=lambda item: (-item["entropy"], item["avg_mastery"]))
+
     return {
         "readiness_index_ri": readiness_index_ri_value,
+        "readiness_index_view": readiness_index_view_value,
         "readiness_daily_delta": daily_delta,
-        "weak_topics": weak_topics,
+        "weak_topics": weak_topics[:6],
+    }
+
+
+@study_session_router.get("/dashboard-home")
+def dashboard_home_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    GET /study/dashboard-home.
+    Агрегат для главного дашборда: метрики, зоны роста, колоды.
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+
+    refresh_user_global_stats(
+        database_session_instance=database_connection_session,
+        target_user_account_identifier=user_id,
+    )
+    database_connection_session.refresh(authorized_student_user_account)
+
+    readiness_index_ri_value = float(
+        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    )
+    readiness_index_view_value = max(
+        0.0, min(100.0, readiness_index_ri_value / 10.0)
+    )
+
+    since_dt = datetime.utcnow() - timedelta(days=1)
+    correct_recent = (
+        database_connection_session.execute(
+            select(
+                func.sum(
+                    case(
+                        (
+                            LearningInteractionModel.interaction_is_correct.is_(True),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                )
+            ).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+                LearningInteractionModel.interaction_timestamp >= since_dt,
+            )
+        ).scalar()
+        or 0
+    )
+    total_recent = (
+        database_connection_session.execute(
+            select(func.count()).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+                LearningInteractionModel.interaction_timestamp >= since_dt,
+            )
+        ).scalar()
+        or 0
+    )
+    if total_recent <= 0:
+        daily_delta = 0.0
+    else:
+        daily_delta = (float(correct_recent) / float(total_recent) - 0.5) * 24.0
+
+    since_week = datetime.utcnow() - timedelta(days=7)
+    week_correct = (
+        database_connection_session.execute(
+            select(
+                func.sum(
+                    case(
+                        (
+                            LearningInteractionModel.interaction_is_correct.is_(True),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                )
+            ).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+                LearningInteractionModel.interaction_timestamp >= since_week,
+            )
+        ).scalar()
+        or 0
+    )
+    week_total = (
+        database_connection_session.execute(
+            select(func.count()).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+                LearningInteractionModel.interaction_timestamp >= since_week,
+            )
+        ).scalar()
+        or 0
+    )
+    accuracy_week_pct = (
+        round(100.0 * float(week_correct) / float(week_total))
+        if week_total > 0
+        else 0
+    )
+
+    total_interactions = int(
+        database_connection_session.execute(
+            select(func.count()).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+            )
+        ).scalar()
+        or 0
+    )
+
+    now_utc = datetime.utcnow()
+    due_today_count = int(
+        database_connection_session.execute(
+            select(func.count())
+            .select_from(UserCardProgressModel)
+            .where(
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+                or_(
+                    UserCardProgressModel.progress_next_review_date.is_(None),
+                    UserCardProgressModel.progress_next_review_date <= now_utc,
+                ),
+            )
+        ).scalar()
+        or 0
+    )
+
+    ts_rows = database_connection_session.execute(
+        select(LearningInteractionModel.interaction_timestamp).where(
+            LearningInteractionModel.interaction_owner_user_account_id == user_id,
+            LearningInteractionModel.interaction_timestamp.isnot(None),
+        )
+    ).scalars().all()
+    date_set: set = set()
+    for ts in ts_rows:
+        if ts is None:
+            continue
+        d_val = ts.date() if hasattr(ts, "date") else ts
+        date_set.add(d_val)
+    streak_days = 0
+    if date_set:
+        max_d = max(date_set)
+        d_cursor = max_d
+        while d_cursor in date_set:
+            streak_days += 1
+            d_cursor -= timedelta(days=1)
+
+    mastery_rows = database_connection_session.execute(
+        select(UserCardProgressModel.progress_mastery_level).where(
+            UserCardProgressModel.progress_owner_user_account_id == user_id,
+        )
+    ).scalars().all()
+    mastery_levels = [float(x) for x in mastery_rows]
+    if mastery_levels:
+        mastery_mean = sum(mastery_levels) / float(len(mastery_levels))
+        mastery_std = statistics.pstdev(mastery_levels)
+    else:
+        mastery_mean = 0.0
+        mastery_std = 0.0
+    sigma_norm = max(0.0, 1.0 - mastery_std / 25.0)
+    hours_val = float(authorized_student_user_account.total_learning_hours or 0.0)
+    mastery_avg_pct = int(round(max(0.0, min(100.0, mastery_mean))))
+    sigma_norm_pct = int(round(max(0.0, min(100.0, sigma_norm * 100.0))))
+    hours_rounded = int(round(hours_val))
+
+    weak_topics_query = (
+        select(
+            LearningTopicModel.topic_unique_identifier,
+            LearningTopicModel.topic_display_name,
+            LearningTopicModel.topic_entropy_value,
+            LearningTopicModel.topic_entropy_complexity_value,
+            func.avg(UserCardProgressModel.progress_mastery_level).label(
+                "avg_mastery"
+            ),
+        )
+        .join(
+            LearningCardModel,
+            LearningCardModel.parent_topic_reference_id
+            == LearningTopicModel.topic_unique_identifier,
+        )
+        .join(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+            isouter=True,
+        )
+        .where(LearningTopicModel.topic_owner_user_id == user_id)
+        .group_by(
+            LearningTopicModel.topic_unique_identifier,
+            LearningTopicModel.topic_display_name,
+            LearningTopicModel.topic_entropy_value,
+            LearningTopicModel.topic_entropy_complexity_value,
+        )
+        .order_by(
+            func.coalesce(
+                func.avg(UserCardProgressModel.progress_mastery_level),
+                0.0,
+            ).asc(),
+        )
+        .limit(24)
+    )
+    weak_rows = database_connection_session.execute(weak_topics_query).all()
+
+    weak_topics: list[dict] = []
+    for row in weak_rows:
+        topic_model = database_connection_session.get(
+            LearningTopicModel, int(row.topic_unique_identifier)
+        )
+        if topic_model is None:
+            continue
+        entropy_value = _calculate_dynamic_topic_entropy_value_from_history(
+            database_session_instance=database_connection_session,
+            user_id=user_id,
+            topic_instance=topic_model,
+        )
+        avg_mastery_value = float(row.avg_mastery or 0.0)
+        weak_topics.append(
+            {
+                "topic_unique_identifier": int(row.topic_unique_identifier),
+                "topic_display_name": row.topic_display_name,
+                "entropy": entropy_value,
+                "avg_mastery": avg_mastery_value,
+            }
+        )
+    weak_topics.sort(key=lambda item: (-item["entropy"], item["avg_mastery"]))
+
+    zones_out: list[dict] = []
+    for wt in weak_topics[:6]:
+        m_int = int(round(max(0.0, min(100.0, wt["avg_mastery"]))))
+        ent = float(wt["entropy"])
+        if ent > 1.0 or m_int < 30:
+            status = "warn"
+        elif m_int < 60:
+            status = "mid"
+        else:
+            status = "ok"
+        zones_out.append(
+            {
+                "topic_id": int(wt["topic_unique_identifier"]),
+                "name": wt["topic_display_name"],
+                "mastery": m_int,
+                "complexity": round(ent, 2),
+                "status": status,
+            }
+        )
+
+    weakest = min(zones_out, key=lambda z: z["mastery"]) if zones_out else None
+    weak_topic_name = weakest["name"] if weakest else "—"
+    weak_topic_mastery_pct = weakest["mastery"] if weakest else 0
+
+    decks_query = (
+        select(
+            LearningTopicModel.topic_unique_identifier,
+            LearningTopicModel.topic_display_name,
+            LearningTopicModel.related_topics_count,
+            LearningTopicModel.is_public_visibility,
+            func.avg(UserCardProgressModel.progress_mastery_level).label("avg_m"),
+        )
+        .join(
+            LearningCardModel,
+            LearningCardModel.parent_topic_reference_id
+            == LearningTopicModel.topic_unique_identifier,
+        )
+        .outerjoin(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+        )
+        .where(LearningTopicModel.topic_owner_user_id == user_id)
+        .group_by(
+            LearningTopicModel.topic_unique_identifier,
+            LearningTopicModel.topic_display_name,
+            LearningTopicModel.related_topics_count,
+            LearningTopicModel.is_public_visibility,
+        )
+        .order_by(
+            func.coalesce(
+                func.avg(UserCardProgressModel.progress_mastery_level),
+                0.0,
+            ).asc(),
+        )
+        .limit(6)
+    )
+    deck_rows = database_connection_session.execute(decks_query).all()
+    decks_out = []
+    for dr in deck_rows:
+        avg_m = float(dr.avg_m or 0.0)
+        decks_out.append(
+            {
+                "id": int(dr.topic_unique_identifier),
+                "name": dr.topic_display_name,
+                "connections": int(dr.related_topics_count or 0),
+                "isPublic": bool(dr.is_public_visibility),
+                "mastery": int(round(max(0.0, min(100.0, avg_m)))),
+            }
+        )
+
+    return {
+        "user_name": authorized_student_user_account.user_full_display_name,
+        "readiness_index_ri": readiness_index_ri_value,
+        "readiness_index_view": readiness_index_view_value,
+        "readiness_daily_delta": daily_delta,
+        "due_today_count": due_today_count,
+        "streak_days": streak_days,
+        "accuracy_week_pct": accuracy_week_pct,
+        "total_cards_studied": total_interactions,
+        "mastery_avg_pct": mastery_avg_pct,
+        "sigma_norm_pct": sigma_norm_pct,
+        "hours_learning": hours_rounded,
+        "weak_topic_name": weak_topic_name,
+        "weak_topic_mastery_pct": weak_topic_mastery_pct,
+        "zones": zones_out,
+        "decks": decks_out,
     }
 
 

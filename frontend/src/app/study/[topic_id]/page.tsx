@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { BlockMath } from "react-katex";
+import { BlockMath, InlineMath } from "react-katex";
 import {
   createContext,
   useCallback,
@@ -17,7 +17,15 @@ import { fetchTopics } from "@/lib/api/content";
 import { getToken } from "@/lib/auth";
 
 type Confidence = "тяжело" | "средне" | "легко";
-type Stage = "IDLE" | "CHECKING" | "RESULT" | "RATING" | "TRANSITION" | "FINISHED" | "EMPTY";
+/** FSM: Question → Checking → Comparison → Rating → Transition → next card */
+type Stage =
+  | "QUESTION"
+  | "CHECKING"
+  | "COMPARISON"
+  | "RATING"
+  | "TRANSITION"
+  | "FINISHED"
+  | "EMPTY";
 
 interface StudyCard {
   card_id: number;
@@ -79,10 +87,33 @@ function normalizeAnswer(input: string): string {
 function renderLatexBlock(content: string) {
   const clean = content.replace(/\$\$/g, "").trim();
   return (
-    <div className="text-center leading-[1.6]">
+    <div className="min-w-0 max-w-full text-center leading-[1.6]">
       <BlockMath math={clean || content} />
     </div>
   );
+}
+
+/** Сравнение ответов: при LaTeX рендерим оба варианта. */
+function renderAnswerMaybeLatex(text: string, className: string) {
+  const t = text.trim();
+  if (!t) return <span className="text-neutral-500">—</span>;
+  if (t.includes("$$")) {
+    const clean = t.replace(/\$\$/g, "").trim();
+    return (
+      <div className={`overflow-x-auto overflow-y-hidden ${className}`}>
+        <BlockMath math={clean || t} />
+      </div>
+    );
+  }
+  if (t.startsWith("$") && t.endsWith("$") && t.length > 2) {
+    const inner = t.slice(1, -1);
+    return (
+      <div className={`overflow-x-auto ${className}`}>
+        <InlineMath math={inner} />
+      </div>
+    );
+  }
+  return <p className={className}>{text}</p>;
 }
 
 function EnergyBadge() {
@@ -181,7 +212,7 @@ export default function StudyTopicPage({
   const [energy, setEnergy] = useState(100);
   const [card, setCard] = useState<StudyCard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [stage, setStage] = useState<Stage>("IDLE");
+  const [stage, setStage] = useState<Stage>("QUESTION");
   const [answerInput, setAnswerInput] = useState("");
   const [submittedAnswer, setSubmittedAnswer] = useState("");
   const [isCorrect, setIsCorrect] = useState(false);
@@ -193,7 +224,7 @@ export default function StudyTopicPage({
   const [summaryLoaded, setSummaryLoaded] = useState(false);
   const [seenCardIds, setSeenCardIds] = useState<number[]>([]);
 
-  // τ timer: starts after IDLE content is painted, stops on "Проверить"/Enter.
+  // τ: старт после отрисовки карточки (двойной rAF), стоп на «Проверить» / Enter.
   const startTimeRef = useRef<number | null>(null);
   const responseTimeMsRef = useRef<number | null>(null);
 
@@ -244,7 +275,7 @@ export default function StudyTopicPage({
     setAnswerInput("");
     setSubmittedAnswer("");
     setShowExplanation(false);
-    setStage("IDLE");
+    setStage("QUESTION");
     startTimeRef.current = null;
     responseTimeMsRef.current = null;
     if (data.session) {
@@ -307,7 +338,7 @@ export default function StudyTopicPage({
   const energyContext = useMemo(() => ({ energy, setEnergy }), [energy]);
 
   const handleCheck = useCallback(() => {
-    if (!card || stage !== "IDLE") return;
+    if (!card || stage !== "QUESTION") return;
     const startedAt = startTimeRef.current;
     const responseMs = startedAt == null ? 0 : performance.now() - startedAt;
     const response_time_ms_value = Math.max(1, Math.round(responseMs));
@@ -321,7 +352,7 @@ export default function StudyTopicPage({
     setSubmittedAnswer(answerInput);
     setIsCorrect(ok);
     if (!ok) setShakeNonce((v) => v + 1);
-    window.setTimeout(() => setStage("RESULT"), 300);
+    window.setTimeout(() => setStage("COMPARISON"), 300);
   }, [card, stage, answerInput]);
 
   const handleConfidence = useCallback(
@@ -346,7 +377,7 @@ export default function StudyTopicPage({
         body: JSON.stringify({
           card_id: card.card_id,
           confidence,
-          response_time_ms: response_time_ms_value,
+          response_thinking_time_ms: response_time_ms_value,
           is_correct: isCorrect,
           user_answer: submittedAnswer,
           current_session_energy: energy,
@@ -376,18 +407,26 @@ export default function StudyTopicPage({
   );
 
   useEffect(() => {
-    if (stage !== "IDLE" || !card) return;
+    if (stage !== "QUESTION" || !card) return;
     responseTimeMsRef.current = null;
-    const id = window.requestAnimationFrame(() => {
-      startTimeRef.current = performance.now();
+    let cancelled = false;
+    let innerRaf = 0;
+    const outerRaf = window.requestAnimationFrame(() => {
+      innerRaf = window.requestAnimationFrame(() => {
+        if (!cancelled) startTimeRef.current = performance.now();
+      });
     });
-    return () => window.cancelAnimationFrame(id);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(outerRaf);
+      window.cancelAnimationFrame(innerRaf);
+    };
   }, [stage, card?.card_id]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!card) return;
-      if (stage === "IDLE" && e.key === "Enter" && !e.shiftKey) {
+      if (stage === "QUESTION" && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleCheck();
       } else if (stage === "RATING" && e.key === "1") {
@@ -407,7 +446,7 @@ export default function StudyTopicPage({
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FFFFFF] px-6 py-20 dark:bg-[#09090B]">
+      <div className="min-h-screen bg-[#FFFFFF] px-6 pt-[calc(var(--app-header-h)+4rem)] dark:bg-[#09090B]">
         <div className="mx-auto h-64 w-full max-w-2xl animate-pulse rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] dark:border-[#27272A] dark:bg-[#18181B]" />
       </div>
     );
@@ -423,9 +462,10 @@ export default function StudyTopicPage({
           onExit={() => router.push("/dashboard")}
         />
 
-        <main className="flex flex-col">
-          <div className="pt-20">
-            <div className="min-h-[calc(100vh-80px)] px-6 py-8">
+        <main className="flex min-h-screen flex-col">
+          {/* Header guard: глобальный хедер + фиксированная панель сессии (h-16) */}
+          <div className="pt-[calc(var(--app-header-h)+4rem)]">
+            <div className="min-h-[calc(100vh-var(--app-header-h)-4rem)] px-6 py-8">
             {showBreakHint && stage !== "FINISHED" && (
               <div className="mx-auto mb-4 w-full max-w-4xl rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-700">
                 Энергия ниже оптимума, лучше сделать перерыв.
@@ -461,7 +501,7 @@ export default function StudyTopicPage({
                       onClick={() => {
                         setSummary(null);
                         setSummaryLoaded(false);
-                        setStage("IDLE");
+                        setStage("QUESTION");
                         void startSession();
                       }}
                       className="rounded-md border border-[#E4E4E7] px-4 py-2 text-sm"
@@ -507,7 +547,7 @@ export default function StudyTopicPage({
             )}
 
             {card && stage !== "FINISHED" && stage !== "EMPTY" && (
-              <div className="flex min-h-[calc(100vh-64px)] items-center justify-center">
+              <div className="flex min-h-[calc(100vh-var(--app-header-h)-4rem)] flex-col items-center justify-center">
                 <AnimatePresence mode="wait">
                   <motion.section
                     key={`${card.card_id}-${shakeNonce}`}
@@ -516,7 +556,7 @@ export default function StudyTopicPage({
                       opacity: stage === "TRANSITION" ? 0 : 1,
                       y: stage === "TRANSITION" ? -60 : 0,
                       x:
-                        stage === "RESULT" && !isCorrect
+                        stage === "COMPARISON" && !isCorrect
                           ? [0, -8, 8, -6, 6, 0]
                           : 0,
                     }}
@@ -525,9 +565,11 @@ export default function StudyTopicPage({
                     className="w-full max-w-2xl rounded-[12px] border border-[#E4E4E7] bg-[#FAFAFA] p-8 shadow-sm dark:border-[#27272A] dark:bg-[#18181B]"
                   >
                     <div className="mb-4 text-xs capitalize text-neutral-500">{card.card_type}</div>
-                    <div className="mb-6 max-h-[320px] overflow-y-auto overflow-x-auto">{renderLatexBlock(card.question_text)}</div>
+                    <div className="mb-6 max-h-[320px] min-w-0 overflow-y-auto overflow-x-auto">
+                      {renderLatexBlock(card.question_text)}
+                    </div>
 
-                    {stage === "IDLE" && (
+                    {stage === "QUESTION" && (
                       <div className="space-y-3">
                         <textarea
                           autoFocus
@@ -550,7 +592,7 @@ export default function StudyTopicPage({
 
                     {stage === "CHECKING" && <div className="text-sm text-neutral-500">Проверяем ответ...</div>}
 
-                    {(stage === "RESULT" || stage === "TRANSITION") && (
+                    {(stage === "COMPARISON" || stage === "TRANSITION") && (
                       <div className="space-y-4">
                         <div className={`rounded-md border px-3 py-2 text-sm ${isCorrect ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}>
                           {isCorrect ? "Верно" : "Неверно"}
@@ -558,11 +600,20 @@ export default function StudyTopicPage({
                         <div className="grid gap-3 md:grid-cols-2">
                           <div className="rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 dark:border-[#27272A] dark:bg-[#09090B]">
                             <div className="mb-1 text-xs text-neutral-500">Твой ответ</div>
-                            <p className={`text-sm ${isCorrect ? "text-emerald-700" : "text-red-600 line-through"}`}>{submittedAnswer || "—"}</p>
+                            {isCorrect ? (
+                              renderAnswerMaybeLatex(submittedAnswer, "text-sm text-emerald-700")
+                            ) : (
+                              renderAnswerMaybeLatex(
+                                submittedAnswer,
+                                "text-sm text-neutral-500 line-through"
+                              )
+                            )}
                           </div>
-                          <div className="rounded-lg border border-[#E4E4E7] bg-[#F7F7F7] px-3 py-2 dark:border-[#27272A] dark:bg-[#121214]">
-                            <div className="mb-1 text-xs text-neutral-500">Эталонный ответ</div>
-                            <div className="overflow-x-auto font-semibold">{renderLatexBlock(card.answer_text)}</div>
+                          <div className="rounded-lg border border-[#E4E4E7] bg-[#F7F7F7] px-3 py-2 font-semibold text-neutral-900 shadow-[0_0_15px_rgba(34,197,94,0.1)] dark:border-[#27272A] dark:bg-[#121214] dark:text-neutral-100">
+                            <div className="mb-1 text-xs font-normal text-neutral-500">Ожидаемый ответ</div>
+                            <div className="min-w-0 overflow-x-auto font-semibold">
+                              {renderLatexBlock(card.answer_text)}
+                            </div>
                           </div>
                         </div>
                         <div>

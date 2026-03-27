@@ -167,7 +167,7 @@ export default function SessionPage() {
         />
       )}
 
-      <div id="decks" className="pt-3">
+      <div id="decks" className="pt-0">
         <div className="mx-auto mb-4 w-full max-w-[720px] px-4">
           <DashboardInsights />
         </div>
