@@ -8,9 +8,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  let body: string | undefined;
+  try {
+    const raw = await req.text();
+    body = raw.length > 0 ? raw : undefined;
+  } catch {
+    body = undefined;
+  }
+
   const res = await fetch(`${API_BASE}/study/session-finish`, {
     method: "POST",
-    headers: { Authorization: auth },
+    headers: {
+      Authorization: auth,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body ? { body } : {}),
   });
   const text = await res.text();
   return new NextResponse(text, {

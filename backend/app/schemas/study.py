@@ -1,5 +1,5 @@
 """Pydantic-схемы для сессий обучения."""
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class UserAnswerSubmission(BaseModel):
@@ -65,3 +65,19 @@ class StudyAnswerRequest(BaseModel):
         if not 0 <= value <= 5:
             raise ValueError("Оценка уверенности должна быть от 0 до 5")
         return value
+
+
+class SessionInteractionItem(BaseModel):
+    """Один ответ в сессии (для итогового summary с клиента)."""
+
+    is_correct: bool
+    response_time_ms: int = Field(..., ge=0, le=3_600_000)
+    topic_id: int
+
+
+class SessionFinishPayload(BaseModel):
+    """Опциональные данные завершения: точнее, чем только Redis."""
+
+    interactions: list[SessionInteractionItem] | None = None
+    ri_before_snapshot: float | None = None
+    started_at_ts: float | None = None

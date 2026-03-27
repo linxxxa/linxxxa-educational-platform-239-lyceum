@@ -253,7 +253,7 @@ def calculate_session_efficiency_eta(
     unique_topics_count_k: int,
 ) -> float:
     """η = (ΔM ⋅ log2(K + 1)) / ((M0 + 0.1) ⋅ t_hours)."""
-    if session_duration_hours <= 0.0:
+    if session_duration_hours <= 1e-12:
         return 0.0
 
     k_value = max(0, int(unique_topics_count_k))

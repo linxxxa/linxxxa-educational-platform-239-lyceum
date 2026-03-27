@@ -53,10 +53,19 @@ interface SessionFinishSummary {
   delta_ri: number;
   accuracy_correct: number;
   accuracy_total: number;
+  accuracy_percent?: number;
   session_minutes: number;
+  /** Сумма τ по карточкам (мс), только время до «Проверить». */
+  total_response_time_ms?: number;
   ri_before: number;
   ri_after: number;
   energy_left: number;
+}
+
+interface SessionInteractionRecord {
+  is_correct: boolean;
+  response_time_ms: number;
+  topic_id: number;
 }
 
 interface EnergyContextState {
@@ -194,8 +203,17 @@ function MetricCard({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Длительность сессии по часам (стена). */
 function formatMinutes(v: number): string {
   const totalSec = Math.max(0, Math.round(v * 60));
+  const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
+  const ss = String(totalSec % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+/** Суммарное время раздумий (мс) → MM:SS. */
+function formatThinkingMs(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
   const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
   const ss = String(totalSec % 60).padStart(2, "0");
   return `${mm}:${ss}`;
@@ -223,8 +241,11 @@ export default function StudyTopicPage({
   const [summary, setSummary] = useState<SessionFinishSummary | null>(null);
   const [summaryLoaded, setSummaryLoaded] = useState(false);
   const [seenCardIds, setSeenCardIds] = useState<number[]>([]);
+  const sessionInteractionsRef = useRef<SessionInteractionRecord[]>([]);
+  const sessionRiBeforeRef = useRef<number | null>(null);
+  const sessionStartedAtRef = useRef<number | null>(null);
 
-  // τ: старт после отрисовки карточки (двойной rAF), стоп на «Проверить» / Enter.
+  // τ: старт после отрисовки вопроса (двойной rAF); стоп на «Проверить» — дальше время не считается.
   const startTimeRef = useRef<number | null>(null);
   const responseTimeMsRef = useRef<number | null>(null);
 
@@ -288,6 +309,9 @@ export default function StudyTopicPage({
   const startSession = useCallback(async () => {
     if (!topicId) return;
     setSeenCardIds([]);
+    sessionInteractionsRef.current = [];
+    sessionRiBeforeRef.current = null;
+    sessionStartedAtRef.current = null;
     if (!getToken()) {
       router.replace("/login");
       return;
@@ -296,6 +320,14 @@ export default function StudyTopicPage({
     if (start.status === 401) {
       router.replace("/login");
       return;
+    }
+    if (start.ok) {
+      const j = (await start.json().catch(() => ({}))) as {
+        ri_before?: number;
+        started_at_ts?: number;
+      };
+      if (typeof j.ri_before === "number") sessionRiBeforeRef.current = j.ri_before;
+      if (typeof j.started_at_ts === "number") sessionStartedAtRef.current = j.started_at_ts;
     }
     try {
       const topics = await fetchTopics();
@@ -310,7 +342,32 @@ export default function StudyTopicPage({
       router.replace("/login");
       return;
     }
-    const res = await fetch("/api/session/finish", { method: "POST", headers: authHeaders() });
+    const interactions = sessionInteractionsRef.current;
+    const body: Record<string, unknown> = {};
+    if (sessionRiBeforeRef.current != null) {
+      body.ri_before_snapshot = sessionRiBeforeRef.current;
+    }
+    if (sessionStartedAtRef.current != null) {
+      body.started_at_ts = sessionStartedAtRef.current;
+    }
+    if (interactions.length > 0) {
+      body.interactions = interactions.map((x) => ({
+        is_correct: x.is_correct,
+        response_time_ms: Math.round(x.response_time_ms),
+        topic_id: x.topic_id,
+      }));
+    }
+    const payload =
+      Object.keys(body).length > 0 ? JSON.stringify(body) : undefined;
+
+    const res = await fetch("/api/session/finish", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        ...(payload ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(payload ? { body: payload } : {}),
+    });
     if (res.ok) {
       const data = (await res.json()) as SessionFinishSummary;
       setSummary(data);
@@ -385,6 +442,15 @@ export default function StudyTopicPage({
       });
       const data = (await res.json().catch(() => ({}))) as ProcessAnswerResponse;
       if (!res.ok) return;
+
+      const tid = Number(topicId) || 0;
+      const record: SessionInteractionRecord = {
+        is_correct: isCorrect,
+        response_time_ms: Math.round(response_time_ms_value),
+        topic_id: tid,
+      };
+      sessionInteractionsRef.current = [...sessionInteractionsRef.current, record];
+
       const nextEnergy = Math.max(0, Number(data.energy_left ?? energy));
       setEnergy(nextEnergy);
       setSession((prev) => (prev ? { ...prev, energy: nextEnergy } : prev));
@@ -480,9 +546,22 @@ export default function StudyTopicPage({
                 <div className="grid gap-4 md:grid-cols-2">
                   <MetricCard label="Эффективность (η)" value={`${(summary?.eta_percent ?? 0).toFixed(1)}%`} />
                   <MetricCard label="Прирост RI (ΔRI)" value={`${(summary?.delta_ri ?? 0) >= 0 ? "+" : ""}${(summary?.delta_ri ?? 0).toFixed(1)}`} />
-                  <MetricCard label="Точность" value={`${summary?.accuracy_correct ?? 0}/${summary?.accuracy_total ?? 0}`} />
-                  <MetricCard label="Время" value={formatMinutes(summary?.session_minutes ?? 0)} />
+                  <MetricCard
+                    label="Точность"
+                    value={
+                      summary?.accuracy_total
+                        ? `${summary.accuracy_percent?.toFixed(0) ?? Math.round((100 * (summary.accuracy_correct ?? 0)) / (summary.accuracy_total || 1))}% (${summary.accuracy_correct}/${summary.accuracy_total})`
+                        : "—"
+                    }
+                  />
+                  <MetricCard
+                    label="Время раздумий"
+                    value={formatThinkingMs(summary?.total_response_time_ms ?? 0)}
+                  />
                 </div>
+                <p className="text-center text-xs text-neutral-500">
+                  Длительность сессии (стена): {formatMinutes(summary?.session_minutes ?? 0)}
+                </p>
                 <div className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-8 dark:border-[#27272A] dark:bg-[#18181B]">
                   <div className="text-xs uppercase text-neutral-500">Current RI</div>
                   <SummaryCounter from={summary?.ri_before ?? 0} to={summary?.ri_after ?? 0} />
@@ -501,6 +580,7 @@ export default function StudyTopicPage({
                       onClick={() => {
                         setSummary(null);
                         setSummaryLoaded(false);
+                        sessionInteractionsRef.current = [];
                         setStage("QUESTION");
                         void startSession();
                       }}

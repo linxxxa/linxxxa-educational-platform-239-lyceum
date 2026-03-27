@@ -9,7 +9,7 @@ import statistics
 from datetime import datetime, timedelta
 from math import sqrt
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, case, cast, Float, func, or_, select
 
@@ -23,7 +23,7 @@ from app.models.learning_interaction import (
 from app.models.user_account import UserAccountModel
 from app.models.user_card_progress import UserCardProgressModel
 from app.models.learning_topic import LearningTopicModel
-from app.schemas.study import UserAnswerSubmission
+from app.schemas.study import SessionFinishPayload, UserAnswerSubmission
 from app.services.math_engine import (
     calculate_forgetting_rate,
     calculate_session_efficiency_eta,
@@ -495,7 +495,12 @@ def study_session_start_endpoint(
             str(float(avg_mastery_before)),
             ex=ttl,
         )
-    return {"ok": True, "energy": energy}
+    return {
+        "ok": True,
+        "energy": energy,
+        "ri_before": float(ri_before_value),
+        "started_at_ts": float(datetime.utcnow().timestamp()),
+    }
 
 
 @study_session_router.get("/next-card")
@@ -1020,10 +1025,15 @@ def finish_session_endpoint(
     authorized_student_user_account: UserAccountModel = Depends(
         get_current_authorized_user_object
     ),
+    payload: SessionFinishPayload | None = Body(default=None),
 ):
     """
     POST /study/session-finish.
     Возвращает summary с η, ΔRI, точностью и временем сессии.
+
+    Если передан ``payload.interactions``, точность и суммарное время
+    раздумий берутся оттуда (надёжно при отключённом Redis).
+    ``ri_before_snapshot`` фиксирует RI в начале сессии для ΔRI.
     """
     user_id = authorized_student_user_account.user_unique_identifier
     redis_client = _redis_client_optional()
@@ -1037,17 +1047,31 @@ def finish_session_endpoint(
     mastery_before = 0.0
 
     if redis_client is not None:
-        started_ts = float(
-            redis_client.get(f"session:{user_id}:started_at_ts")
-            or started_ts
-        )
+        redis_started = redis_client.get(f"session:{user_id}:started_at_ts")
+        if redis_started is not None:
+            started_ts = float(redis_started)
         answers_total = int(redis_client.get(f"session:{user_id}:answers_total") or 0)
         answers_correct = int(
             redis_client.get(f"session:{user_id}:answers_correct") or 0
         )
-        ri_before = float(redis_client.get(f"session:{user_id}:ri_before") or ri_before)
+        redis_ri = redis_client.get(f"session:{user_id}:ri_before")
+        if redis_ri is not None:
+            ri_before = float(redis_ri)
         mastery_before = float(
             redis_client.get(f"session:{user_id}:mastery_before") or 0.0
+        )
+
+    if payload is not None and payload.ri_before_snapshot is not None:
+        ri_before = float(payload.ri_before_snapshot)
+    if payload is not None and payload.started_at_ts is not None:
+        started_ts = float(payload.started_at_ts)
+
+    total_response_time_ms = 0
+    if payload is not None and payload.interactions is not None:
+        answers_total = len(payload.interactions)
+        answers_correct = sum(1 for x in payload.interactions if x.is_correct)
+        total_response_time_ms = int(
+            sum(int(x.response_time_ms) for x in payload.interactions)
         )
 
     now_ts = datetime.utcnow().timestamp()
@@ -1090,11 +1114,19 @@ def finish_session_endpoint(
         or 1
     )
 
-    eta_value = calculate_session_efficiency_eta(
-        initial_mastery_m0=float(mastery_before),
-        final_mastery=float(avg_mastery_after),
-        session_duration_hours=float(session_hours),
-        unique_topics_count_k=int(unique_topics_count),
+    eta_value = 0.0
+    if session_hours > 1e-9:
+        eta_value = calculate_session_efficiency_eta(
+            initial_mastery_m0=float(mastery_before),
+            final_mastery=float(avg_mastery_after),
+            session_duration_hours=float(session_hours),
+            unique_topics_count_k=int(unique_topics_count),
+        )
+
+    accuracy_percent = (
+        (100.0 * float(answers_correct) / float(answers_total))
+        if answers_total > 0
+        else 0.0
     )
 
     return {
@@ -1102,7 +1134,9 @@ def finish_session_endpoint(
         "delta_ri": float(ri_after - ri_before),
         "accuracy_correct": int(answers_correct),
         "accuracy_total": int(answers_total),
+        "accuracy_percent": float(round(accuracy_percent, 1)),
         "session_minutes": float(session_minutes),
+        "total_response_time_ms": int(total_response_time_ms),
         "ri_before": float(ri_before),
         "ri_after": float(ri_after),
         "energy_left": float(
