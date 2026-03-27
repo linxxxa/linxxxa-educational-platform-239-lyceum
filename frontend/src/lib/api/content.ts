@@ -73,3 +73,60 @@ export async function fetchTopics(
   if (!res.ok) throw new Error("Не удалось загрузить темы");
   return res.json() as Promise<TopicListItem[]>;
 }
+
+export async function updateTopic(
+  topicId: number,
+  payload: {
+    topic_display_name?: string | null;
+    topic_description_text?: string | null;
+    parent_subject_reference_id?: number | null;
+    is_public_visibility?: boolean | null;
+  }
+): Promise<TopicListItem> {
+  const res = await fetch(`/api/content/topics/${topicId}`, {
+    method: "PUT",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const msg =
+      typeof e.detail === "string" ? e.detail : "Ошибка обновления колоды";
+    throw new Error(msg);
+  }
+  return res.json() as Promise<TopicListItem>;
+}
+
+export async function deleteTopic(topicId: number): Promise<void> {
+  const res = await fetch(`/api/content/topics/${topicId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const msg =
+      typeof e.detail === "string" ? e.detail : "Ошибка удаления колоды";
+    throw new Error(msg);
+  }
+}
+
+export async function addCardsToTopic(
+  topicId: number,
+  payload: { new_card_payload_collection: DeckBatchSaveRequest["new_card_payload_collection"] }
+): Promise<{ cards_created_count: number; card_unique_identifiers: number[] }> {
+  const res = await fetch(`/api/content/topics/${topicId}/cards/batch`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const msg =
+      typeof e.detail === "string" ? e.detail : "Ошибка добавления карточек";
+    throw new Error(msg);
+  }
+  return res.json() as Promise<{
+    cards_created_count: number;
+    card_unique_identifiers: number[];
+  }>;
+}

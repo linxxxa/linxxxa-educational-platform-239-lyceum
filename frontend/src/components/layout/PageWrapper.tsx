@@ -12,7 +12,7 @@ export function PageWrapper({ children }: PageWrapperProps) {
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
-      <div className="flex-1">{children}</div>
+      <div className="flex-1 pt-[var(--app-header-h)]">{children}</div>
       <Footer />
     </div>
   );

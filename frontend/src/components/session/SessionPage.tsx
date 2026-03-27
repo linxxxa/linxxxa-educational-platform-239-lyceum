@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { fetchTopics } from "@/lib/api/content";
 import { getToken } from "@/lib/auth";
 import CardAnswer from "./CardAnswer";
 import CardQuestion from "./CardQuestion";
+import DashboardInsights from "./DashboardInsights";
 import DecksInSession from "./DecksInSession";
 import EmptyState from "./EmptyState";
 import SessionFinished from "./SessionFinished";
@@ -27,6 +29,7 @@ export default function SessionPage() {
   const [card, setCard] = useState<Card | null>(null);
   const [session, setSession] = useState<SessionState | null>(null);
   const [answerStartTime, setAnswerStartTime] = useState<number>(0);
+  const [hasAnyDecks, setHasAnyDecks] = useState(false);
 
   const loadNextCard = useCallback(async () => {
     setPhase("loading");
@@ -50,7 +53,7 @@ export default function SessionPage() {
     }
     if (!data.card) {
       setSession(data.session ?? null);
-      setPhase("empty");
+      setPhase(hasAnyDecks ? "finished" : "empty");
       return;
     }
 
@@ -58,7 +61,7 @@ export default function SessionPage() {
     setSession(data.session ?? null);
     setPhase("question");
     setAnswerStartTime(Date.now());
-  }, [router]);
+  }, [router, hasAnyDecks]);
 
   const initSession = useCallback(async () => {
     const t = getToken();
@@ -73,6 +76,12 @@ export default function SessionPage() {
     if (start.status === 401) {
       router.replace("/login");
       return;
+    }
+    try {
+      const topics = await fetchTopics();
+      setHasAnyDecks(topics.length > 0);
+    } catch {
+      // Если список тем не удалось загрузить, оставляем поведение по умолчанию.
     }
     await loadNextCard();
   }, [loadNextCard, router]);
@@ -159,6 +168,9 @@ export default function SessionPage() {
       )}
 
       <div id="decks" className="pt-3">
+        <div className="mx-auto mb-4 w-full max-w-[720px] px-4">
+          <DashboardInsights />
+        </div>
         <DecksInSession />
       </div>
 
@@ -170,7 +182,7 @@ export default function SessionPage() {
           {phase === "answer" && card && (
             <CardAnswer card={card} onConfidence={handleConfidence} />
           )}
-          {phase === "empty" && <EmptyState />}
+          {phase === "empty" && !hasAnyDecks && <EmptyState />}
           {phase === "finished" && <SessionFinished session={session} />}
         </div>
       </div>

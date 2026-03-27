@@ -74,23 +74,44 @@ export default function DecksInSession() {
           Колод пока нет. Создайте первую на странице тем.
         </p>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="grid gap-2 sm:grid-cols-2">
           {topics.map((t) => (
             <div
               key={t.topic_unique_identifier}
-              className={`rounded-full border px-3 py-1 text-[12px] ${
-                t.is_public_visibility
-                  ? "border-neutral-200 bg-white text-neutral-800 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
-                  : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-              }`}
-              title={
-                t.is_public_visibility ? "Публичная" : "Приватная"
-              }
+              className="flex items-center justify-between rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-3 dark:border-[#27272A] dark:bg-[#18181B]"
             >
-              <span className="font-medium">{t.topic_display_name}</span>
-              <span className="ml-2 text-neutral-500 dark:text-neutral-400">
-                ({t.related_topics_count})
-              </span>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                  {t.topic_display_name}
+                </div>
+                <div className="text-xs text-neutral-500">
+                  {t.is_public_visibility ? "Публичная" : "Приватная"} · связей:{" "}
+                  {t.related_topics_count}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Link
+                  href={`/dashboard/topics?focus=${t.topic_unique_identifier}`}
+                  className="rounded-md border border-[#E4E4E7] bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  title="Управлять колодой"
+                >
+                  Управлять
+                </Link>
+                <Link
+                  href={`/dashboard/topics/${t.topic_unique_identifier}/cards/add`}
+                  className="rounded-md border border-[#E4E4E7] bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  title="Добавить карточки"
+                >
+                  + Карточки
+                </Link>
+                <Link
+                  href={`/study/${t.topic_unique_identifier}`}
+                  className="rounded-md bg-[#2F3437] px-3 py-1.5 text-xs font-medium text-white"
+                  title="Начать повторение"
+                >
+                  Повторить →
+                </Link>
+              </div>
             </div>
           ))}
         </div>

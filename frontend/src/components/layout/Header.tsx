@@ -13,6 +13,7 @@ interface HeaderProps {
 function Header({ className }: HeaderProps) {
   const router = useRouter();
   const authed = useAuthState();
+  const [mounted, setMounted] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -23,6 +24,10 @@ function Header({ className }: HeaderProps) {
     setMenuOpen(false);
     router.push("/");
   };
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 10);
@@ -83,7 +88,7 @@ function Header({ className }: HeaderProps) {
 
         {/* Кнопки (десктоп) */}
         <div className="hidden items-center gap-3 md:flex">
-          {authed ? (
+          {mounted && authed ? (
             <>
               <Link
                 href="/dashboard#decks"
@@ -160,7 +165,7 @@ function Header({ className }: HeaderProps) {
           >
             Как это работает
           </Link>
-          {authed ? (
+          {mounted && authed ? (
             <>
               <Link
                 href="/dashboard#decks"
