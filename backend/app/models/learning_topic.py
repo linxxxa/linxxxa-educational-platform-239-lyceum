@@ -3,7 +3,7 @@
 topic_entropy_complexity_value (H(T)) участвует в расчёте сложности карточек
 и влияет на модифицированный SM-2 (множитель M(complexity)).
 """
-from sqlalchemy import Column, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.database import Base_Model_Declarative_Root
@@ -38,6 +38,18 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         ForeignKey("user_accounts.user_unique_identifier"),
         nullable=True,
         index=True,
+    )
+    parent_subject_reference_id = Column(
+        Integer,
+        ForeignKey("learning_subjects.subject_unique_identifier"),
+        nullable=True,
+        index=True,
+    )
+    is_public_visibility = Column(Boolean, nullable=False, default=True)
+
+    parent_subject = relationship(
+        "LearningSubjectModel",
+        back_populates="child_topics",
     )
     subtopics = relationship(
         "LearningTopicModel",

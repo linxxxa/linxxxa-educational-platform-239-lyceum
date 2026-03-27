@@ -51,6 +51,10 @@ class UserAccountModel(Base_Model_Declarative_Root):
     knowledge_deviation_sigma = Column(Float, default=0.0)         # Параметр σ
     last_calculated_readiness_index_ri = Column(Float, nullable=True)
 
+    owned_learning_subjects = relationship(
+        "LearningSubjectModel",
+        back_populates="subject_creator",
+    )
     owned_learning_topics = relationship(
         "LearningTopicModel", back_populates="topic_owner"
     )

@@ -7,10 +7,11 @@ import logging
 import os
 import statistics
 from datetime import datetime, timedelta
+from math import sqrt
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_, case, cast, Float, func, or_, select
 
 from app.api.dependencies import get_current_authorized_user_object
 from app.database import get_database_session_generator
@@ -21,9 +22,13 @@ from app.models.learning_interaction import (
 )
 from app.models.user_account import UserAccountModel
 from app.models.user_card_progress import UserCardProgressModel
+from app.models.learning_topic import LearningTopicModel
 from app.schemas.study import UserAnswerSubmission
 from app.services.math_engine import (
     calculate_forgetting_rate,
+    calculate_session_efficiency_eta,
+    calculate_session_delta_t_hours,
+    calculate_topic_entropy,
     run_sm2_step,
     update_energy,
 )
@@ -37,20 +42,6 @@ logger = logging.getLogger(__name__)
 study_session_router = APIRouter(prefix="/study", tags=["Сессия обучения"])
 
 
-def _get_card_difficulty_level(learning_card_instance: LearningCardModel) -> int:
-    """
-    Извлекает difficulty_level из карточки.
-    Поддерживает difficulty_level (LearningCards) и difficulty_level_L (ИП).
-    """
-    return int(
-        getattr(
-            learning_card_instance,
-            "difficulty_level_L",
-            getattr(learning_card_instance, "difficulty_level", 1),
-        )
-    )
-
-
 def _get_topic_entropy_value_from_topic(topic_instance: object) -> float:
     """
     Извлекает topic_entropy_value из темы для расчёта SM-2.
@@ -62,6 +53,88 @@ def _get_topic_entropy_value_from_topic(topic_instance: object) -> float:
             "topic_entropy_value",
             getattr(topic_instance, "topic_entropy_complexity_value", 0.0),
         )
+    )
+
+
+def _calculate_dynamic_topic_entropy_value_from_history(
+    database_session_instance: Session,
+    user_id: int,
+    topic_instance: LearningTopicModel,
+    *,
+    default_pi_value: float = 0.5,
+) -> float:
+    """
+    Гравитация темы H(T) через вероятность ошибки pi по истории.
+
+    Подтемы: принимаем "подтемой" каждую карточку в рамках темы.
+    Для каждой карточки:
+      pi = wrong_count / total_count,
+    а если истории нет — pi = 0.5.
+
+    C (кол-во связей) берётся из learning_topics.related_topics_count.
+    """
+    topic_id_value = int(topic_instance.topic_unique_identifier)
+    connections_count_c = int(getattr(topic_instance, "related_topics_count", 0) or 0)
+
+    card_id_rows = database_session_instance.execute(
+        select(LearningCardModel.card_unique_identifier).where(
+            LearningCardModel.owner_user_account_id == user_id,
+            LearningCardModel.parent_topic_reference_id == topic_id_value,
+        )
+    ).scalars().all()
+    card_ids = [int(x) for x in card_id_rows]
+
+    if not card_ids:
+        # Если нет карточек в теме — берём "легкую" дефолтную вероятность ошибки.
+        return calculate_topic_entropy([default_pi_value], connections_count_c)
+
+    wrong_count_query = func.sum(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(False),
+                1,
+            ),
+            else_=0,
+        )
+    )
+    total_count_query = func.count(LearningInteractionModel.interaction_unique_identifier)
+
+    aggregation_rows = database_session_instance.execute(
+        select(
+            LearningInteractionModel.interaction_target_card_unique_identifier,
+            wrong_count_query.label("wrong_count"),
+            total_count_query.label("total_count"),
+        ).where(
+            LearningInteractionModel.interaction_owner_user_account_id == user_id,
+            LearningInteractionModel.interaction_target_card_unique_identifier.in_(
+                card_ids
+            ),
+        ).group_by(
+            LearningInteractionModel.interaction_target_card_unique_identifier
+        )
+    ).all()
+
+    per_card_agg: dict[int, tuple[int, int]] = {}
+    for row in aggregation_rows:
+        cid_value = int(row[0])
+        per_card_agg[cid_value] = (int(row.wrong_count or 0), int(row.total_count or 0))
+
+    error_rates_pi_list: list[float] = []
+    for cid in card_ids:
+        wrong_total = per_card_agg.get(cid)
+        if not wrong_total:
+            error_rates_pi_list.append(float(default_pi_value))
+            continue
+        wrong_count_value, total_count_value = wrong_total
+        if total_count_value <= 0:
+            error_rates_pi_list.append(float(default_pi_value))
+        else:
+            error_rates_pi_list.append(
+                float(wrong_count_value) / float(total_count_value)
+            )
+
+    return calculate_topic_entropy(
+        error_rates_pi_list, connections_count_c, alpha=0.1
     )
 
 
@@ -87,6 +160,617 @@ def _fetch_card_and_validate_ownership(
     return card
 
 
+def _redis_client_optional():
+    try:
+        import redis as redis_library
+    except ModuleNotFoundError:
+        return None
+    try:
+        client = redis_library.Redis.from_url(
+            os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+            decode_responses=True,
+        )
+        # Проверка доступности: если Redis не поднят, работаем без него.
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
+def _session_reset_redis_keys(user_id: int) -> float:
+    """E=100, cards_done=0, TTL 2 ч."""
+    r = _redis_client_optional()
+    if r is None:
+        return 100.0
+    ttl = 2 * 60 * 60
+    r.set(f"session:{user_id}:energy", "100", ex=ttl)
+    r.set(f"session:{user_id}:cards_done", "0", ex=ttl)
+    r.set(f"session:{user_id}:answers_total", "0", ex=ttl)
+    r.set(f"session:{user_id}:answers_correct", "0", ex=ttl)
+    r.set(
+        f"session:{user_id}:started_at_ts",
+        str(datetime.utcnow().timestamp()),
+        ex=ttl,
+    )
+    return 100.0
+
+
+def _calculate_user_lambda_i_from_interactions_history(
+    database_session_instance: Session,
+    user_id: int,
+) -> float:
+    """
+    λ_i — персональный коэффициент забывания по истории Interactions.
+
+    По 239-протоколу:
+      λ_i = 0.05 + 0.3⋅(1−A_i) − 0.1⋅(1−σ_t_norm)
+    где A_i — точность, σ_t — разброс времени ответа.
+    """
+    total_count_query = func.count(
+        LearningInteractionModel.interaction_unique_identifier
+    )
+    correct_count_query = func.sum(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(True),
+                1,
+            ),
+            else_=0,
+        )
+    )
+    # σ_t считаем по правильным ответам (как в learning_orchestrator).
+    mean_time_query = func.avg(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(True),
+                cast(LearningInteractionModel.interaction_response_time_ms, Float),
+            ),
+            else_=None,
+        )
+    )
+    mean_square_time_query = func.avg(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(True),
+                cast(LearningInteractionModel.interaction_response_time_ms, Float)
+                * cast(LearningInteractionModel.interaction_response_time_ms, Float),
+            ),
+            else_=None,
+        )
+    )
+
+    row = database_session_instance.execute(
+        select(
+            total_count_query.label("total_count"),
+            correct_count_query.label("correct_count"),
+            mean_time_query.label("mean_time"),
+            mean_square_time_query.label("mean_square_time"),
+        ).where(LearningInteractionModel.interaction_owner_user_account_id == user_id)
+    ).one()
+
+    total_count_value = int(row.total_count or 0)
+    correct_count_value = int(row.correct_count or 0)
+    accuracy_value = (
+        correct_count_value / float(total_count_value)
+        if total_count_value > 0
+        else 0.0
+    )
+
+    mean_time_value = float(row.mean_time or 0.0)
+    mean_square_time_value = float(row.mean_square_time or 0.0)
+    variance_value = max(0.0, mean_square_time_value - mean_time_value**2)
+    response_time_std_ms_value = sqrt(variance_value)
+
+    return calculate_forgetting_rate(
+        accuracy=accuracy_value, response_time_std_ms=response_time_std_ms_value
+    )
+
+
+def _calculate_user_lambda_i_including_current_interaction(
+    database_session_instance: Session,
+    *,
+    user_id: int,
+    submitted_answer_is_correct: bool,
+    response_thinking_time_ms_value: int,
+    topic_id_value: int,
+) -> float:
+    """
+    λ_i с учётом текущего ответа (виртуально добавляем 1 запись в статистику).
+    Это нужно, чтобы "сжатие" интервала и откат реакции были мгновенными.
+    """
+    total_count_query = func.count(
+        LearningInteractionModel.interaction_unique_identifier
+    )
+    correct_count_query = func.sum(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(True),
+                1,
+            ),
+            else_=0,
+        )
+    )
+
+    mean_time_correct_query = func.avg(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(True),
+                cast(LearningInteractionModel.interaction_response_time_ms, Float),
+            ),
+            else_=None,
+        )
+    )
+    mean_square_time_correct_query = func.avg(
+        case(
+            (
+                LearningInteractionModel.interaction_is_correct.is_(True),
+                cast(LearningInteractionModel.interaction_response_time_ms, Float)
+                * cast(LearningInteractionModel.interaction_response_time_ms, Float),
+            ),
+            else_=None,
+        )
+    )
+
+    row = database_session_instance.execute(
+        select(
+            total_count_query.label("total_count"),
+            correct_count_query.label("correct_count"),
+            mean_time_correct_query.label("mean_time_correct"),
+            mean_square_time_correct_query.label(
+                "mean_square_time_correct"
+            ),
+        )
+        .select_from(LearningInteractionModel)
+        .join(
+            LearningCardModel,
+            LearningCardModel.card_unique_identifier
+            == LearningInteractionModel.interaction_target_card_unique_identifier,
+        )
+        .where(
+            LearningInteractionModel.interaction_owner_user_account_id == user_id,
+            LearningCardModel.parent_topic_reference_id == topic_id_value,
+        )
+    ).one()
+
+    total_count_value = int(row.total_count or 0)
+    correct_count_value = int(row.correct_count or 0)
+
+    total_count_new = total_count_value + 1
+    correct_count_new = correct_count_value + (
+        1 if submitted_answer_is_correct else 0
+    )
+
+    accuracy_new_value = (
+        correct_count_new / float(total_count_new)
+        if total_count_new > 0
+        else 0.0
+    )
+
+    # σ_t считается по разбросу правильных ответов.
+    correct_mean_time_value = float(row.mean_time_correct or 0.0)
+    correct_mean_square_value = float(row.mean_square_time_correct or 0.0)
+
+    if submitted_answer_is_correct:
+        correct_count_old = max(0, correct_count_value)
+        correct_count_target = max(1, correct_count_new)
+
+        mean_new = (
+            correct_mean_time_value * float(correct_count_old)
+            + float(response_thinking_time_ms_value)
+        ) / float(correct_count_target)
+
+        mean_square_new = (
+            correct_mean_square_value * float(correct_count_old)
+            + float(response_thinking_time_ms_value * response_thinking_time_ms_value)
+        ) / float(correct_count_target)
+
+        variance_new = max(0.0, mean_square_new - mean_new**2)
+        response_time_std_ms_value = sqrt(variance_new)
+    else:
+        variance_old = max(
+            0.0, correct_mean_square_value - correct_mean_time_value**2
+        )
+        response_time_std_ms_value = sqrt(variance_old)
+
+    return calculate_forgetting_rate(
+        accuracy=accuracy_new_value, response_time_std_ms=response_time_std_ms_value
+    )
+
+
+def _increment_session_cards_done_redis(user_id: int) -> None:
+    r = _redis_client_optional()
+    if r is None:
+        return
+    key = f"session:{user_id}:cards_done"
+    r.incr(key)
+    r.expire(key, 2 * 60 * 60)
+
+
+def _increment_session_answers_redis(user_id: int, is_correct: bool) -> None:
+    """Счетчики ответов сессии: total/correct для итогового Summary."""
+    r = _redis_client_optional()
+    if r is None:
+        return
+    total_key = f"session:{user_id}:answers_total"
+    correct_key = f"session:{user_id}:answers_correct"
+    r.incr(total_key)
+    if is_correct:
+        r.incr(correct_key)
+    r.expire(total_key, 2 * 60 * 60)
+    r.expire(correct_key, 2 * 60 * 60)
+
+
+def _get_session_cards_done_redis(user_id: int) -> int:
+    r = _redis_client_optional()
+    if r is None:
+        return 0
+    v = r.get(f"session:{user_id}:cards_done")
+    return int(v) if v is not None else 0
+
+
+def _subject_title_for_topic(
+    database_session_instance: Session,
+    topic_instance: LearningTopicModel | None,
+) -> str:
+    if topic_instance is None:
+        return "Обучение"
+    pid = getattr(topic_instance, "parent_topic_reference_identifier", None)
+    if pid is None:
+        return topic_instance.topic_display_name
+    parent = database_session_instance.get(LearningTopicModel, int(pid))
+    if parent is None:
+        return topic_instance.topic_display_name
+    return parent.topic_display_name
+
+
+def _serialize_card_for_session(
+    card: LearningCardModel,
+    database_session_instance: Session,
+) -> dict:
+    topic = card.parent_topic
+    subject = _subject_title_for_topic(database_session_instance, topic)
+    topic_title = topic.topic_display_name if topic else "Тема"
+    return {
+        "card_id": card.card_unique_identifier,
+        "question_text": card.card_question_text_payload,
+        "answer_text": card.card_answer_text_payload,
+        "card_type": card.card_type.value,
+        "topic_title": topic_title,
+        "subject": subject,
+    }
+
+
+@study_session_router.post("/session-start")
+def study_session_start_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    POST /study/session-start.
+    Сбрасывает E=100 и счётчик карточек в Redis (TTL 2 ч).
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+    ri_before_value = float(
+        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    )
+    avg_mastery_before = (
+        database_connection_session.execute(
+            select(func.avg(UserCardProgressModel.progress_mastery_level)).where(
+                UserCardProgressModel.progress_owner_user_account_id == user_id
+            )
+        ).scalar()
+        or 0.0
+    )
+    energy = _session_reset_redis_keys(user_id)
+
+    # Этап подготовки: вычисляем "гравитацию" памяти пользователя (λ_i)
+    # и ограничение по времени сессии (Δt) до показа карточек.
+    r = _redis_client_optional()
+    if r is not None:
+        ttl = 2 * 60 * 60
+        lambda_i_value = _calculate_user_lambda_i_from_interactions_history(
+            database_connection_session=database_connection_session,
+            user_id=user_id,
+        )
+        r.set(
+            f"session:{user_id}:lambda_i",
+            str(lambda_i_value),
+            ex=ttl,
+        )
+
+        delta_t_hours_value = calculate_session_delta_t_hours(energy)
+        deadline_ts_value = (
+            datetime.utcnow().timestamp() + delta_t_hours_value * 3600.0
+        )
+        r.set(
+            f"session:{user_id}:deadline_ts",
+            str(deadline_ts_value),
+            ex=ttl,
+        )
+        r.set(f"session:{user_id}:ri_before", str(ri_before_value), ex=ttl)
+        r.set(
+            f"session:{user_id}:mastery_before",
+            str(float(avg_mastery_before)),
+            ex=ttl,
+        )
+    return {"ok": True, "energy": energy}
+
+
+@study_session_router.get("/next-card")
+def study_session_next_card_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    GET /study/next-card.
+    Следующая карточка к повторению (нет progress или next_review <= сейчас).
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+    current_energy, redis_client_instance = (
+        _retrieve_or_initialize_user_energy_value_from_redis(user_id)
+    )
+    if current_energy <= 0.0:
+        return {"finished": True, "session": None}
+
+    # Этап подготовки: если ограничение по времени Δt истекло — завершаем сессию.
+    if redis_client_instance is not None:
+        deadline_ts_string = redis_client_instance.get(
+            f"session:{user_id}:deadline_ts"
+        )
+        if deadline_ts_string is not None:
+            now_ts = datetime.utcnow().timestamp()
+            if now_ts >= float(deadline_ts_string):
+                return {"finished": True, "session": None}
+
+    now = datetime.utcnow()
+
+    due_filter = and_(
+        LearningCardModel.owner_user_account_id == user_id,
+        or_(
+            UserCardProgressModel.progress_next_review_date.is_(None),
+            UserCardProgressModel.progress_next_review_date <= now,
+        ),
+    )
+
+    count_stmt = (
+        select(func.count())
+        .select_from(LearningCardModel)
+        .outerjoin(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+        )
+        .where(due_filter)
+    )
+    total_due = database_connection_session.execute(count_stmt).scalar() or 0
+
+    stmt = (
+        select(LearningCardModel)
+        .options(joinedload(LearningCardModel.parent_topic))
+        .outerjoin(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+        )
+        .where(due_filter)
+        .order_by(
+            func.coalesce(
+                UserCardProgressModel.progress_next_review_date,
+                datetime(1970, 1, 1),
+            ).asc(),
+            LearningCardModel.card_unique_identifier.asc(),
+        )
+        .limit(1)
+    )
+    row = database_connection_session.execute(stmt).scalars().first()
+
+    cards_done = _get_session_cards_done_redis(user_id)
+    energy = float(current_energy)
+
+    if row is None:
+        return {
+            "finished": False,
+            "card": None,
+            "session": {
+                "energy": energy,
+                "cards_done": cards_done,
+                "cards_total": int(total_due),
+            },
+        }
+
+    return {
+        "finished": False,
+        "card": _serialize_card_for_session(row, database_connection_session),
+        "session": {
+            "energy": energy,
+            "cards_done": cards_done,
+            "cards_total": int(total_due),
+        },
+    }
+
+
+@study_session_router.get("/topic/{topic_id}/next-card")
+def study_session_next_card_for_topic_endpoint(
+    topic_id: int,
+    include_future: bool = False,
+    exclude_card_ids: str | None = None,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    GET /study/topic/{topic_id}/next-card.
+    Следующая карточка к повторению в рамках одной темы.
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+    current_energy, redis_client_instance = (
+        _retrieve_or_initialize_user_energy_value_from_redis(user_id)
+    )
+    if current_energy <= 0.0:
+        return {"finished": True, "session": None}
+
+    if redis_client_instance is not None:
+        deadline_ts_string = redis_client_instance.get(
+            f"session:{user_id}:deadline_ts"
+        )
+        if deadline_ts_string is not None:
+            now_ts = datetime.utcnow().timestamp()
+            if now_ts >= float(deadline_ts_string):
+                return {"finished": True, "session": None}
+
+    now = datetime.utcnow()
+    base_filter = and_(
+        LearningCardModel.owner_user_account_id == user_id,
+        LearningCardModel.parent_topic_reference_id == int(topic_id),
+    )
+    excluded: set[int] = set()
+    if exclude_card_ids:
+        for part in exclude_card_ids.split(","):
+            p = part.strip()
+            if not p:
+                continue
+            try:
+                excluded.add(int(p))
+            except ValueError:
+                continue
+    due_filter = and_(
+        base_filter,
+        or_(
+            UserCardProgressModel.progress_next_review_date.is_(None),
+            UserCardProgressModel.progress_next_review_date <= now,
+        ),
+    )
+
+    count_stmt = (
+        select(func.count())
+        .select_from(LearningCardModel)
+        .outerjoin(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+        )
+        .where(due_filter)
+    )
+    total_due = database_connection_session.execute(count_stmt).scalar() or 0
+
+    stmt = (
+        select(LearningCardModel)
+        .options(joinedload(LearningCardModel.parent_topic))
+        .outerjoin(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+        )
+        .where(due_filter)
+        .order_by(
+            func.coalesce(
+                UserCardProgressModel.progress_next_review_date,
+                datetime(1970, 1, 1),
+            ).asc(),
+            LearningCardModel.card_unique_identifier.asc(),
+        )
+        .limit(1)
+    )
+    row = database_connection_session.execute(stmt).scalars().first()
+
+    cards_done = _get_session_cards_done_redis(user_id)
+    energy = float(current_energy)
+
+    if row is None:
+        if include_future:
+            any_filter = base_filter
+            if excluded:
+                any_filter = and_(
+                    base_filter,
+                    LearningCardModel.card_unique_identifier.notin_(excluded),
+                )
+            any_stmt = (
+                select(LearningCardModel)
+                .options(joinedload(LearningCardModel.parent_topic))
+                .outerjoin(
+                    UserCardProgressModel,
+                    and_(
+                        UserCardProgressModel.progress_target_card_unique_identifier
+                        == LearningCardModel.card_unique_identifier,
+                        UserCardProgressModel.progress_owner_user_account_id
+                        == user_id,
+                    ),
+                )
+                .where(any_filter)
+                .order_by(LearningCardModel.card_unique_identifier.asc())
+                .limit(1)
+            )
+            any_row = (
+                database_connection_session.execute(any_stmt).scalars().first()
+            )
+            if any_row is not None:
+                payload = _serialize_card_for_session(
+                    any_row, database_connection_session
+                )
+                payload["explanation_text"] = getattr(
+                    any_row, "card_explanation_text", None
+                )
+                return {
+                    "finished": False,
+                    "card": payload,
+                    "session": {
+                        "energy": energy,
+                        "cards_done": cards_done,
+                        "cards_total": int(total_due),
+                    },
+                    "mode": "training",
+                }
+            # Тренировочный режим: карточки в теме закончились.
+            return {
+                "finished": True,
+                "card": None,
+                "session": {
+                    "energy": energy,
+                    "cards_done": cards_done,
+                    "cards_total": int(total_due),
+                },
+                "mode": "training",
+            }
+        return {
+            "finished": False,
+            "card": None,
+            "session": {
+                "energy": energy,
+                "cards_done": cards_done,
+                "cards_total": int(total_due),
+            },
+        }
+
+    payload = _serialize_card_for_session(row, database_connection_session)
+    payload["explanation_text"] = getattr(row, "card_explanation_text", None)
+    return {
+        "finished": False,
+        "card": payload,
+        "session": {
+            "energy": energy,
+            "cards_done": cards_done,
+            "cards_total": int(total_due),
+        },
+    }
+
+
 @study_session_router.post("/submit-answer")
 def submit_user_answer_endpoint(
     background_tasks: BackgroundTasks,
@@ -110,15 +794,29 @@ def submit_user_answer_endpoint(
     if updated_learning_card_instance is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
 
-    learning_card_difficulty_level_value = _get_card_difficulty_level(
-        updated_learning_card_instance
+    submitted_answer_is_correct = bool(
+        submitted_answer_data_transfer_object.submitted_user_answer_is_correct
+    )
+    submitted_user_subjective_confidence_score = float(
+        submitted_answer_data_transfer_object.user_subjective_confidence_score
+    )
+    response_thinking_time_ms_value = int(
+        submitted_answer_data_transfer_object.response_thinking_time_seconds
+        * 1000.0
+    )
+    calculated_question_quality_q_value = (
+        _calculate_quality_q_value_from_is_correct_and_confidence(
+            submitted_answer_is_correct=submitted_answer_is_correct,
+            submitted_user_subjective_confidence_score=submitted_user_subjective_confidence_score,
+        )
     )
     remaining_user_cognitive_energy = (
         _apply_energy_update_in_redis_or_initialize(
             database_session_instance=database_connection_session,
             authorized_student_user_account=authorized_student_user_account,
-            learning_card_difficulty_level=learning_card_difficulty_level_value,
-            submitted_answer_is_correct=submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
+            response_thinking_time_ms=response_thinking_time_ms_value,
+            question_quality_q_value=submitted_user_subjective_confidence_score,
+            submitted_answer_is_correct=submitted_answer_is_correct,
         )
     )
 
@@ -138,32 +836,79 @@ def submit_user_answer_endpoint(
             if existing_progress_record is not None
             else 0
         )
+        _increment_session_cards_done_redis(
+            authorized_student_user_account.user_unique_identifier
+        )
+        _increment_session_answers_redis(
+            authorized_student_user_account.user_unique_identifier,
+            bool(submitted_answer_data_transfer_object.submitted_user_answer_is_correct),
+        )
         return {
             "session_completed": True,
             "is_correct": submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
             "energy_left": remaining_user_cognitive_energy,
             "next_review": next_review_date_value,
             "new_mastery": new_mastery_value,
+            "topic_unique_identifier": getattr(
+                updated_learning_card_instance.parent_topic,
+                "topic_unique_identifier",
+                None,
+            ),
+            "topic_display_name": getattr(
+                updated_learning_card_instance.parent_topic,
+                "topic_display_name",
+                None,
+            ),
+            "topic_mastery_before": float(new_mastery_value),
+            "topic_mastery_after": float(new_mastery_value),
         }
 
-    calculated_question_quality_q_value = _calculate_quality_q_value_from_is_correct_and_confidence(
-        submitted_answer_is_correct=submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
-        submitted_user_subjective_confidence_score=submitted_answer_data_transfer_object.user_subjective_confidence_score,
-    )
-    topic_entropy_value_for_sm2 = _get_topic_entropy_value_from_topic(
-        updated_learning_card_instance.parent_topic
-    )
-    user_personal_forgetting_lambda_from_account = float(
-        getattr(
-            authorized_student_user_account,
-            "personal_forgetting_lambda",
-            getattr(
-                authorized_student_user_account,
-                "personal_lambda",
-                0.05,
-            ),
+    # calculated_question_quality_q_value вычислен выше.
+    user_id = authorized_student_user_account.user_unique_identifier
+    redis_client_instance = _redis_client_optional()
+    ttl_seconds_value = 2 * 60 * 60
+
+    # Этап процесса: λ_i нужно обновить "мгновенно" с учётом текущего ответа,
+    # чтобы неверный клик сразу сжал интервал и UI успел показать откат.
+    topic_id_value = int(updated_learning_card_instance.parent_topic_reference_id)
+    user_personal_forgetting_lambda_from_account = (
+        _calculate_user_lambda_i_including_current_interaction(
+            database_session_instance=database_connection_session,
+            user_id=user_id,
+            submitted_answer_is_correct=submitted_answer_is_correct,
+            response_thinking_time_ms_value=response_thinking_time_ms_value,
+            topic_id_value=topic_id_value,
         )
     )
+
+    # Этап подготовки: вычисляем гравитацию темы H(T) из истории ошибок.
+    topic_instance_value = updated_learning_card_instance.parent_topic
+    if topic_instance_value is None:
+        topic_entropy_value_for_sm2 = 0.0
+    else:
+        topic_id_value = int(topic_instance_value.topic_unique_identifier)
+        topic_entropy_key = f"session:{user_id}:topic_entropy:{topic_id_value}"
+        topic_entropy_string = (
+            redis_client_instance.get(topic_entropy_key)
+            if redis_client_instance is not None
+            else None
+        )
+        if topic_entropy_string is not None:
+            topic_entropy_value_for_sm2 = float(topic_entropy_string)
+        else:
+            topic_entropy_value_for_sm2 = (
+                _calculate_dynamic_topic_entropy_value_from_history(
+                    database_session_instance=database_connection_session,
+                    user_id=user_id,
+                    topic_instance=topic_instance_value,
+                )
+            )
+            if redis_client_instance is not None:
+                redis_client_instance.set(
+                    topic_entropy_key,
+                    str(topic_entropy_value_for_sm2),
+                    ex=ttl_seconds_value,
+                )
 
     calculated_new_easiness_factor, repetition_interval_days_count = run_sm2_step(
         confidence_score_q=int(calculated_question_quality_q_value),
@@ -177,6 +922,7 @@ def submit_user_answer_endpoint(
         previous_interval_days_count=updated_learning_card_instance.card_last_interval_days,
         calculated_topic_entropy_value=topic_entropy_value_for_sm2,
         user_personal_forgetting_coefficient=user_personal_forgetting_lambda_from_account,
+        response_thinking_time_ms=response_thinking_time_ms_value,
     )
 
     updated_next_review_datetime, updated_topic_mastery_average_int, previous_topic_mastery_average_value = (
@@ -202,11 +948,166 @@ def submit_user_answer_endpoint(
         session_duration_hours=session_duration_hours_value,
     )
 
+    _increment_session_cards_done_redis(
+        authorized_student_user_account.user_unique_identifier
+    )
+    _increment_session_answers_redis(
+        authorized_student_user_account.user_unique_identifier,
+        bool(submitted_answer_data_transfer_object.submitted_user_answer_is_correct),
+    )
+
     return {
         "is_correct": submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
         "energy_left": remaining_user_cognitive_energy,
         "next_review": updated_next_review_datetime.date(),
         "new_mastery": updated_topic_mastery_average_int,
+        "topic_unique_identifier": int(
+            updated_learning_card_instance.parent_topic_reference_id
+        ),
+        "topic_display_name": (
+            updated_learning_card_instance.parent_topic.topic_display_name
+            if updated_learning_card_instance.parent_topic is not None
+            else None
+        ),
+        "topic_mastery_before": float(previous_topic_mastery_average_value),
+        "topic_mastery_after": float(updated_topic_mastery_average_int),
+    }
+
+
+@study_session_router.post("/process-answer")
+def process_answer_endpoint(
+    background_tasks: BackgroundTasks,
+    submitted_answer_data_transfer_object: UserAnswerSubmission,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    POST /study/process-answer.
+    Единый pipeline обработки ответа + флаг suggest_break для фронта.
+    """
+    result = submit_user_answer_endpoint(
+        background_tasks=background_tasks,
+        submitted_answer_data_transfer_object=submitted_answer_data_transfer_object,
+        database_connection_session=database_connection_session,
+        authorized_student_user_account=authorized_student_user_account,
+    )
+
+    user_id = authorized_student_user_account.user_unique_identifier
+    energy_left = float(result.get("energy_left", 0.0))
+
+    suggest_break = energy_left < 10.0
+    redis_client_instance = _redis_client_optional()
+    if redis_client_instance is not None:
+        deadline_ts_string = redis_client_instance.get(
+            f"session:{user_id}:deadline_ts"
+        )
+        if deadline_ts_string is not None:
+            now_ts = datetime.utcnow().timestamp()
+            if now_ts >= float(deadline_ts_string):
+                suggest_break = True
+
+    return {
+        **result,
+        "suggest_break": bool(suggest_break),
+    }
+
+
+@study_session_router.post("/session-finish")
+def finish_session_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    POST /study/session-finish.
+    Возвращает summary с η, ΔRI, точностью и временем сессии.
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+    redis_client = _redis_client_optional()
+
+    started_ts = datetime.utcnow().timestamp()
+    answers_total = 0
+    answers_correct = 0
+    ri_before = float(
+        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    )
+    mastery_before = 0.0
+
+    if redis_client is not None:
+        started_ts = float(
+            redis_client.get(f"session:{user_id}:started_at_ts")
+            or started_ts
+        )
+        answers_total = int(redis_client.get(f"session:{user_id}:answers_total") or 0)
+        answers_correct = int(
+            redis_client.get(f"session:{user_id}:answers_correct") or 0
+        )
+        ri_before = float(redis_client.get(f"session:{user_id}:ri_before") or ri_before)
+        mastery_before = float(
+            redis_client.get(f"session:{user_id}:mastery_before") or 0.0
+        )
+
+    now_ts = datetime.utcnow().timestamp()
+    session_hours = max(0.0, (now_ts - started_ts) / 3600.0)
+    session_minutes = max(0.0, (now_ts - started_ts) / 60.0)
+
+    refresh_user_global_stats(
+        database_session_instance=database_connection_session,
+        target_user_account_identifier=user_id,
+    )
+    database_connection_session.refresh(authorized_student_user_account)
+    ri_after = float(
+        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    )
+
+    avg_mastery_after = (
+        database_connection_session.execute(
+            select(func.avg(UserCardProgressModel.progress_mastery_level)).where(
+                UserCardProgressModel.progress_owner_user_account_id == user_id
+            )
+        ).scalar()
+        or 0.0
+    )
+
+    unique_topics_count = (
+        database_connection_session.execute(
+            select(func.count(func.distinct(LearningCardModel.parent_topic_reference_id)))
+            .select_from(LearningInteractionModel)
+            .join(
+                LearningCardModel,
+                LearningCardModel.card_unique_identifier
+                == LearningInteractionModel.interaction_target_card_unique_identifier,
+            )
+            .where(
+                LearningInteractionModel.interaction_owner_user_account_id == user_id,
+                LearningInteractionModel.interaction_timestamp
+                >= datetime.utcfromtimestamp(started_ts),
+            )
+        ).scalar()
+        or 1
+    )
+
+    eta_value = calculate_session_efficiency_eta(
+        initial_mastery_m0=float(mastery_before),
+        final_mastery=float(avg_mastery_after),
+        session_duration_hours=float(session_hours),
+        unique_topics_count_k=int(unique_topics_count),
+    )
+
+    return {
+        "eta_percent": float(max(0.0, min(100.0, eta_value))),
+        "delta_ri": float(ri_after - ri_before),
+        "accuracy_correct": int(answers_correct),
+        "accuracy_total": int(answers_total),
+        "session_minutes": float(session_minutes),
+        "ri_before": float(ri_before),
+        "ri_after": float(ri_after),
+        "energy_left": float(
+            _retrieve_or_initialize_user_energy_value_from_redis(user_id)[0]
+        ),
     }
 
 
@@ -231,6 +1132,136 @@ def refresh_user_global_stats_endpoint(
     return {"status": "ok", "message": "Глобальная статистика обновлена"}
 
 
+@study_session_router.get("/dashboard-insights")
+def dashboard_insights_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    GET /study/dashboard-insights.
+    Возвращает:
+    - readiness_index_ri и дневной дельта-прирост;
+    - список "слабых тем" (высокая энтропия + низкое mastery).
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+
+    # Обновляем агрегаты перед чтением RI, чтобы фронт видел актуальные данные.
+    refresh_user_global_stats(
+        database_session_instance=database_connection_session,
+        target_user_account_identifier=user_id,
+    )
+    database_connection_session.refresh(authorized_student_user_account)
+
+    readiness_index_ri_value = float(
+        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    )
+
+    # Простой daily delta: баланс правильных/неправильных ответов за 24ч.
+    since_dt = datetime.utcnow() - timedelta(days=1)
+    correct_recent = (
+        database_connection_session.execute(
+            select(
+                func.sum(
+                    case(
+                        (
+                            LearningInteractionModel.interaction_is_correct.is_(True),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                )
+            ).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+                LearningInteractionModel.interaction_timestamp >= since_dt,
+            )
+        ).scalar()
+        or 0
+    )
+    total_recent = (
+        database_connection_session.execute(
+            select(func.count()).where(
+                LearningInteractionModel.interaction_owner_user_account_id
+                == user_id,
+                LearningInteractionModel.interaction_timestamp >= since_dt,
+            )
+        ).scalar()
+        or 0
+    )
+    if total_recent <= 0:
+        daily_delta = 0.0
+    else:
+        daily_delta = (float(correct_recent) / float(total_recent) - 0.5) * 24.0
+
+    weak_topics_query = (
+        select(
+            LearningTopicModel.topic_unique_identifier,
+            LearningTopicModel.topic_display_name,
+            LearningTopicModel.topic_entropy_value,
+            LearningTopicModel.topic_entropy_complexity_value,
+            func.avg(UserCardProgressModel.progress_mastery_level).label(
+                "avg_mastery"
+            ),
+        )
+        .join(
+            LearningCardModel,
+            LearningCardModel.parent_topic_reference_id
+            == LearningTopicModel.topic_unique_identifier,
+        )
+        .join(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+            isouter=True,
+        )
+        .where(LearningTopicModel.topic_owner_user_id == user_id)
+        .group_by(
+            LearningTopicModel.topic_unique_identifier,
+            LearningTopicModel.topic_display_name,
+            LearningTopicModel.topic_entropy_value,
+            LearningTopicModel.topic_entropy_complexity_value,
+        )
+        .order_by(
+            func.coalesce(
+                LearningTopicModel.topic_entropy_value,
+                LearningTopicModel.topic_entropy_complexity_value,
+                0.0,
+            ).desc(),
+            func.coalesce(func.avg(UserCardProgressModel.progress_mastery_level), 0.0).asc(),
+        )
+        .limit(6)
+    )
+    weak_topics_rows = database_connection_session.execute(weak_topics_query).all()
+
+    weak_topics = []
+    for row in weak_topics_rows:
+        entropy_value = float(
+            row.topic_entropy_value
+            if row.topic_entropy_value is not None
+            else row.topic_entropy_complexity_value or 0.0
+        )
+        avg_mastery_value = float(row.avg_mastery or 0.0)
+        weak_topics.append(
+            {
+                "topic_unique_identifier": int(row.topic_unique_identifier),
+                "topic_display_name": row.topic_display_name,
+                "entropy": entropy_value,
+                "avg_mastery": avg_mastery_value,
+            }
+        )
+
+    return {
+        "readiness_index_ri": readiness_index_ri_value,
+        "readiness_daily_delta": daily_delta,
+        "weak_topics": weak_topics,
+    }
+
+
 def _retrieve_or_initialize_user_energy_value_from_redis(
     authorized_student_user_account_identifier: int,
 ) -> tuple[float, object | None]:
@@ -239,19 +1270,22 @@ def _retrieve_or_initialize_user_energy_value_from_redis(
         import redis as redis_library
     except ModuleNotFoundError:
         return 100.0, None
-    redis_url_value = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    redis_client_instance = redis_library.Redis.from_url(
-        redis_url_value, decode_responses=True
-    )
-    session_energy_cache_key_string = (
-        f"session:{authorized_student_user_account_identifier}:energy"
-    )
-    cached_energy_value_string = redis_client_instance.get(
-        session_energy_cache_key_string
-    )
-    if cached_energy_value_string is None:
-        return 100.0, redis_client_instance
-    return float(cached_energy_value_string), redis_client_instance
+    try:
+        redis_url_value = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        redis_client_instance = redis_library.Redis.from_url(
+            redis_url_value, decode_responses=True
+        )
+        session_energy_cache_key_string = (
+            f"session:{authorized_student_user_account_identifier}:energy"
+        )
+        cached_energy_value_string = redis_client_instance.get(
+            session_energy_cache_key_string
+        )
+        if cached_energy_value_string is None:
+            return 100.0, redis_client_instance
+        return float(cached_energy_value_string), redis_client_instance
+    except Exception:
+        return 100.0, None
 
 
 def _persist_updated_user_energy_value_in_redis(
@@ -281,13 +1315,15 @@ def _persist_updated_user_energy_value_in_redis(
 def _apply_energy_update_in_redis_or_initialize(
     database_session_instance: Session,
     authorized_student_user_account: UserAccountModel,
-    learning_card_difficulty_level: int,
+    response_thinking_time_ms: int,
+    question_quality_q_value: float,
     submitted_answer_is_correct: bool,
 ) -> float:
     """
     Обновляет когнитивную энергию в Redis (или user_accounts при отсутствии Redis).
 
-    Использует difficulty_level_L из LearningCards и is_correct.
+    Стоимость энергии зависит от динамической когнитивной нагрузки:
+    τ (response_thinking_time_ms) и уверенности Q (question_quality_q_value).
     Затрагивает: Redis (ключ session:{user_id}:energy) или user_accounts.
     """
     current_energy_value, redis_client_instance = (
@@ -297,16 +1333,18 @@ def _apply_energy_update_in_redis_or_initialize(
     )
     remaining_user_cognitive_energy = update_energy(
         current_energy_value,
-        learning_card_difficulty_level,
-        submitted_answer_is_correct,
+        response_thinking_time_ms=response_thinking_time_ms,
+        user_subjective_confidence_score_q=question_quality_q_value,
+        is_correct=submitted_answer_is_correct,
     )
     logger.info(
         "Когнитивная энергия обновлена: user=%s, E_old=%.2f, E_new=%.2f, "
-        "difficulty=%s, is_correct=%s",
+        "tau_ms=%s, Q=%s, is_correct=%s",
         authorized_student_user_account.user_unique_identifier,
         current_energy_value,
         remaining_user_cognitive_energy,
-        learning_card_difficulty_level,
+        response_thinking_time_ms,
+        question_quality_q_value,
         submitted_answer_is_correct,
     )
     if redis_client_instance is None:

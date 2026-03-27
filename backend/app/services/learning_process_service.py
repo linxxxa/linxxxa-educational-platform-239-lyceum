@@ -1,11 +1,13 @@
 """
-Обработка ответов ученика: энергия E, SM-2, RI (τ).
-Энтропия H(T) масштабирует затраты: сложные темы отнимают больше энергии.
+Обработка ответов ученика: энергия E и интервалы повторения.
+
+По 239-протоколу карточная "статическая сложность" больше не используется.
+Сложность теперь динамически считывается из времени ответа и уверенности.
 """
 from datetime import datetime, timedelta, timezone
 
-BASE_ENERGY_COST = 5.0
 MINIMUM_EASINESS_FACTOR = 1.3
+BASE_ENERGY_COST = 5.0
 
 
 def _apply_cognitive_energy_consumption(
@@ -85,26 +87,77 @@ def process_user_answer_impact(
     thinking_time_tau: float,
 ) -> dict:
     """
-    Обрабатывает ответ: энергия E, SM-2, RI (τ).
-    Энтропия H(T) масштабирует затраты энергии.
+    Обрабатывает ответ: энергия E и интервал повторения.
+
+    По 239-протоколу:
+    - энергия списывается динамической стоимостью (время ответа τ + уверенность Q)
+    - интервал сжимается энтропией темы H(T), взятой из learning_topics (JOIN)
     """
-    topic_entropy = (
-        card_object.parent_topic.topic_entropy_complexity_value
-        if card_object.parent_topic
-        else 0.0
+    from app.models.learning_topic import LearningTopicModel
+    from app.services.math_engine import run_sm2_step, update_energy
+
+    thinking_time_tau_ms = float(thinking_time_tau)
+
+    topic_entropy_value = 0.0
+    # JOIN/загрузка темы для H(T)
+    if getattr(card_object, "parent_topic_reference_id", None) is not None:
+        topic_obj = database_session_instance.get(
+            LearningTopicModel,
+            int(card_object.parent_topic_reference_id),
+        )
+        if topic_obj is not None:
+            topic_entropy_value = float(
+                getattr(
+                    topic_obj,
+                    "topic_entropy_value",
+                    getattr(topic_obj, "topic_entropy_complexity_value", 0.0),
+                )
+            )
+
+    is_correct_value = bool(confidence_score_q > 0)
+
+    user_object.current_cognitive_energy_level = update_energy(
+        current_energy=float(user_object.current_cognitive_energy_level),
+        response_thinking_time_ms=thinking_time_tau_ms,
+        user_subjective_confidence_score_q=float(confidence_score_q),
+        is_correct=is_correct_value,
     )
-    user_object.current_cognitive_energy_level = _apply_cognitive_energy_consumption(
-        user_object.current_cognitive_energy_level, topic_entropy
+
+    user_personal_forgetting_coefficient = float(
+        getattr(
+            user_object,
+            "personal_forgetting_lambda",
+            getattr(user_object, "personal_lambda", 0.05),
+        )
     )
-    new_ef, interval_days = _calculate_sm2_parameters(card_object, confidence_score_q)
-    card_object.card_easiness_factor_ef = new_ef
+
+    new_ef, interval_days = run_sm2_step(
+        confidence_score_q=int(confidence_score_q),
+        previous_easiness_factor_ef=float(
+            getattr(card_object, "card_easiness_factor_ef", 2.5)
+        ),
+        repetition_sequence_number=int(
+            getattr(card_object, "card_repetition_sequence_number", 0)
+        ),
+        previous_interval_days_count=int(
+            getattr(card_object, "card_last_interval_days", 0)
+        ),
+        calculated_topic_entropy_value=topic_entropy_value,
+        user_personal_forgetting_coefficient=user_personal_forgetting_coefficient,
+        response_thinking_time_ms=thinking_time_tau_ms,
+    )
+
+    card_object.card_easiness_factor_ef = max(
+        MINIMUM_EASINESS_FACTOR, float(new_ef)
+    )
     card_object.card_repetition_sequence_number += 1
-    card_object.card_last_interval_days = interval_days
+    card_object.card_last_interval_days = int(interval_days)
     card_object.card_next_review_datetime = datetime.now(timezone.utc) + timedelta(
         days=interval_days
     )
     user_object.average_response_time_seconds = _update_tau_sliding_average(
-        user_object.average_response_time_seconds, thinking_time_tau
+        user_object.average_response_time_seconds,
+        thinking_time_tau / 1000.0,
     )
     database_session_instance.commit()
     database_session_instance.refresh(user_object)

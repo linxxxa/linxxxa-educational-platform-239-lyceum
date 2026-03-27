@@ -6,7 +6,6 @@ card_repetition_sequence_number — число успешных повторен
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
-    CheckConstraint,
     Column,
     DateTime,
     Enum as SQLEnum,
@@ -51,7 +50,9 @@ class LearningCardModel(Base_Model_Declarative_Root):
     # Поле card_question_text_payload хранит LaTeX-формулы (длинный текст).
     card_question_text_payload = Column(Text, nullable=False)
     question_text = synonym("card_question_text_payload")
+    card_content_question_latex = synonym("card_question_text_payload")
     card_answer_text_payload = Column(Text, nullable=False)
+    card_content_answer_latex = synonym("card_answer_text_payload")
 
     # Тип карточки влияет на будущие UI-представления и логику анализа.
     card_type = Column(
@@ -59,15 +60,7 @@ class LearningCardModel(Base_Model_Declarative_Root):
         nullable=False,
         default=LearningCardTypeEnum.concept,
     )
-
-    # difficulty_level в диапазоне 1–5 используется в модели энергии E.
-    difficulty_level = Column(Integer, nullable=False, default=1)
-    __table_args__ = (
-        CheckConstraint(
-            "difficulty_level >= 1 AND difficulty_level <= 5",
-            name="learning_cards_difficulty_level_range_check",
-        ),
-    )
+    card_type_category = synonym("card_type")
 
     card_easiness_factor_ef = Column(Float, default=2.5)
     easiness_factor_coefficient = synonym("card_easiness_factor_ef")

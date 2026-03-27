@@ -1,15 +1,12 @@
-"""
-Pydantic-схемы для сессий обучения.
-"""
+"""Pydantic-схемы для сессий обучения."""
 from pydantic import BaseModel, field_validator
 
 
 class UserAnswerSubmission(BaseModel):
-    """
-    Ответ на карточку: ID карточки, признак корректности ответа,
-    уверенность и время раздумья.
+    """Ответ пользователя на карточку.
 
-    По ТЗ Q (0–5) вычисляется в обработчике из:
+    Содержит ID карточки, корректность, уверенность (Q 0–5) и время
+    раздумья. По ТЗ Q вычисляется в обработчике из:
     - is_correct (был ли ответ верным),
     - user_subjective_confidence_score (оценка уверенности пользователя 0–5).
     """
@@ -18,9 +15,14 @@ class UserAnswerSubmission(BaseModel):
     user_subjective_confidence_score: float
     response_thinking_time_seconds: float
 
+    # Доп. поля для UX-диагностики и точного замера (239 Flashcard Engine).
+    user_answer: str | None = None
+    current_session_energy: float | None = None
+
     @field_validator("user_subjective_confidence_score")
     @classmethod
     def validate_confidence_in_range(cls, value: float) -> float:
+        """Проверяет диапазон уверенности 0..5."""
         if not 0 <= value <= 5:
             raise ValueError("Оценка уверенности должна быть от 0 до 5")
         return value
@@ -38,6 +40,7 @@ class StudyAnswerRequest(BaseModel):
     @field_validator("user_subjective_confidence_score")
     @classmethod
     def validate_confidence_in_range(cls, value: float) -> float:
+        """Проверяет диапазон уверенности 0..5."""
         if not 0 <= value <= 5:
             raise ValueError("Оценка уверенности должна быть от 0 до 5")
         return value

@@ -282,10 +282,22 @@ def handle_card_answer(
             database_session_instance=database_session_instance,
         )
 
+        is_correct_value = bool(answer_data.get("is_correct", False))
+        response_time_ms_value = _get_response_time_ms_from_answer_data(
+            answer_data
+        )
+        submitted_user_subjective_confidence_score = float(
+            answer_data.get("user_confidence", 0.0)
+        )
+        calculated_quality_q_value = (
+            _calculate_quality_q_value_from_answer_data(answer_data)
+        )
+
         updated_cognitive_energy_level = update_energy(
             current_energy=current_energy_value,
-            difficulty=int(learning_card_instance.difficulty_level),
-            is_correct=bool(answer_data.get("is_correct", False)),
+            response_thinking_time_ms=response_time_ms_value,
+            user_subjective_confidence_score_q=submitted_user_subjective_confidence_score,
+            is_correct=is_correct_value,
         )
         logger.info(
             "Energy update: user_id=%s card_id=%s old_E=%s new_E=%s",
@@ -303,12 +315,7 @@ def handle_card_answer(
         if updated_cognitive_energy_level <= 0.0:
             raise SessionEnergyDepleted()
 
-        calculated_quality_q_value = _calculate_quality_q_value_from_answer_data(
-            answer_data
-        )
-        submitted_user_subjective_confidence_score = float(
-            answer_data.get("user_confidence", 0.0)
-        )
+        # submitted_user_subjective_confidence_score уже вычислен выше
 
         calculated_topic_entropy_value = _calculate_topic_entropy_value_from_card(
             learning_card_instance
@@ -333,6 +340,7 @@ def handle_card_answer(
                 ),
                 calculated_topic_entropy_value=calculated_topic_entropy_value,
                 user_personal_forgetting_coefficient=user_personal_forgetting_coefficient_value,
+                response_thinking_time_ms=response_time_ms_value,
             )
         )
         logger.info(
@@ -345,9 +353,6 @@ def handle_card_answer(
             user_personal_forgetting_coefficient_value,
         )
 
-        response_time_ms_value = _get_response_time_ms_from_answer_data(
-            answer_data
-        )
         user_subjective_confidence_level_enum = (
             _map_confidence_score_to_user_subjective_confidence_level_enum(
                 submitted_user_subjective_confidence_score
