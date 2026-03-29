@@ -46,6 +46,7 @@ interface ProcessAnswerResponse {
   session_completed?: boolean;
   energy_left?: number;
   suggest_break?: boolean;
+  fast_track_week?: boolean;
 }
 
 interface SessionFinishSummary {
@@ -241,6 +242,7 @@ export default function StudyTopicPage({
   const [summary, setSummary] = useState<SessionFinishSummary | null>(null);
   const [summaryLoaded, setSummaryLoaded] = useState(false);
   const [seenCardIds, setSeenCardIds] = useState<number[]>([]);
+  const [fastTrackPinned, setFastTrackPinned] = useState(false);
   const sessionInteractionsRef = useRef<SessionInteractionRecord[]>([]);
   const sessionRiBeforeRef = useRef<number | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -252,6 +254,12 @@ export default function StudyTopicPage({
   useEffect(() => {
     params.then((p) => setTopicId(p.topic_id));
   }, [params]);
+
+  useEffect(() => {
+    if (!fastTrackPinned) return;
+    const t = window.setTimeout(() => setFastTrackPinned(false), 4500);
+    return () => window.clearTimeout(t);
+  }, [fastTrackPinned]);
 
   const loadNextCard = useCallback(async (excludeIds: number[] = []) => {
     if (!topicId) return;
@@ -443,6 +451,10 @@ export default function StudyTopicPage({
       const data = (await res.json().catch(() => ({}))) as ProcessAnswerResponse;
       if (!res.ok) return;
 
+      if (data.fast_track_week) {
+        setFastTrackPinned(true);
+      }
+
       const tid = Number(topicId) || 0;
       const record: SessionInteractionRecord = {
         is_correct: isCorrect,
@@ -521,6 +533,17 @@ export default function StudyTopicPage({
   return (
     <StudyEnergyContext.Provider value={energyContext}>
       <div className="min-h-screen bg-[#FFFFFF] dark:bg-[#09090B]">
+        {fastTrackPinned && (
+          <div
+            role="status"
+            className="fixed bottom-6 left-1/2 z-[60] flex max-w-[min(92vw,22rem)] -translate-x-1/2 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-medium text-emerald-950 shadow-lg dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100"
+          >
+            <span className="text-base" aria-hidden>
+              ⚡
+            </span>
+            <span>Закреплено! Вернемся через неделю</span>
+          </div>
+        )}
         <StudyHeader
           topicLabel={topicLabel}
           done={session.cards_done}

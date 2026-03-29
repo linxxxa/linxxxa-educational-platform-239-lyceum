@@ -88,9 +88,6 @@ export default function DecksInSession() {
                   <span className="rounded-md border border-[#E4E4E7] bg-white px-2 py-0.5 font-[var(--font-geist-mono)] text-[10px] tabular-nums text-neutral-600 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-400">
                     Связей: {t.related_topics_count}
                   </span>
-                  <span className="rounded-md border border-[#E4E4E7] bg-white px-2 py-0.5 text-[10px] text-neutral-500 dark:border-[#27272A] dark:bg-[#09090B]">
-                    {t.is_public_visibility ? "Публичная" : "Приватная"}
-                  </span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#E4E4E7] pt-3 dark:border-[#27272A]">

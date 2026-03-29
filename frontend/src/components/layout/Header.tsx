@@ -55,18 +55,28 @@ function Header({ className, variant = "default" }: HeaderProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
 
+  const headerBarClasses =
+    variant === "dashboard"
+      ? "border-b border-neutral-200/90 bg-white/95 shadow-sm backdrop-blur-md dark:border-neutral-800 dark:bg-neutral-950/95"
+      : scrolled
+        ? "border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950"
+        : "bg-transparent";
+
+  const headerInnerPad =
+    variant === "dashboard" ? "px-4 sm:px-6 lg:px-8" : "px-5";
+
   return (
     <header
       className={`
-        fixed left-0 right-0 top-0 z-50
+        fixed left-0 right-0 top-0 z-[100]
         transition-all duration-200
-        ${scrolled
-          ? "border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950"
-          : "bg-transparent"}
+        ${headerBarClasses}
         ${className ?? ""}
       `}
     >
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-5">
+      <div
+        className={`mx-auto flex h-14 max-w-5xl items-center justify-between ${headerInnerPad}`}
+      >
         {/* Лого */}
         <Link href="/" className="flex items-center gap-2.5 no-underline">
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[#2F3437]">
@@ -180,7 +190,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
       {menuOpen && (
         <div
           ref={menuRef}
-          className="flex flex-col gap-3 border-b border-neutral-200 bg-white px-5 pb-4 dark:border-neutral-800 dark:bg-neutral-950 md:hidden animate-menu-fade-in"
+          className={`flex flex-col gap-3 border-b border-neutral-200 bg-white pb-4 dark:border-neutral-800 dark:bg-neutral-950 md:hidden animate-menu-fade-in ${headerInnerPad}`}
         >
           <Link
             href="#about"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getToken } from "@/lib/auth";
 import DeckCard from "./DeckCard";
@@ -28,10 +29,99 @@ interface DashboardHomePayload {
   decks: Deck[];
 }
 
+function num(x: unknown, fallback = 0): number {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeDeck(d: unknown): Deck {
+  const o = d && typeof d === "object" ? (d as Record<string, unknown>) : {};
+  return {
+    id: Math.floor(num(o.id, 0)),
+    name: typeof o.name === "string" ? o.name : "Без названия",
+    connections: Math.max(0, Math.floor(num(o.connections, 0))),
+    mastery: Math.max(0, Math.min(100, Math.round(num(o.mastery, 0)))),
+  };
+}
+
+function normalizeZone(z: unknown): GrowthZone & { topic_id?: number } {
+  const o = z && typeof z === "object" ? (z as Record<string, unknown>) : {};
+  const mastery = Math.max(0, Math.min(100, Math.round(num(o.mastery, 0))));
+  const complexity = num(o.complexity, 1.2);
+  const status =
+    o.status === "warn" || o.status === "mid" || o.status === "ok"
+      ? o.status
+      : mastery < 30
+        ? "warn"
+        : mastery < 60
+          ? "mid"
+          : "ok";
+  const out: GrowthZone & { topic_id?: number } = {
+    name: typeof o.name === "string" ? o.name : "Без названия",
+    mastery,
+    complexity: Number.isFinite(complexity) ? complexity : 1.2,
+    status,
+  };
+  if (typeof o.topic_id === "number" && Number.isFinite(o.topic_id)) {
+    out.topic_id = o.topic_id;
+  }
+  return out;
+}
+
+function normalizeDashboardPayload(raw: unknown): DashboardHomePayload {
+  const j =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const decksRaw = Array.isArray(j.decks) ? j.decks : [];
+  const zonesRaw = Array.isArray(j.zones) ? j.zones : [];
+  return {
+    user_name:
+      typeof j.user_name === "string" && j.user_name.trim()
+        ? j.user_name
+        : "Студент",
+    readiness_index_view: Math.max(
+      0,
+      Math.min(100, num(j.readiness_index_view, 0))
+    ),
+    readiness_index_ri: num(j.readiness_index_ri, 0),
+    readiness_daily_delta: num(j.readiness_daily_delta, 0),
+    due_today_count: Math.max(0, Math.floor(num(j.due_today_count, 0))),
+    streak_days: Math.max(0, Math.floor(num(j.streak_days, 0))),
+    accuracy_week_pct: Math.max(
+      0,
+      Math.min(100, Math.round(num(j.accuracy_week_pct, 0)))
+    ),
+    total_cards_studied: Math.max(
+      0,
+      Math.floor(num(j.total_cards_studied, 0))
+    ),
+    mastery_avg_pct: Math.max(
+      0,
+      Math.min(100, Math.round(num(j.mastery_avg_pct, 0)))
+    ),
+    sigma_norm_pct: Math.max(
+      0,
+      Math.min(100, Math.round(num(j.sigma_norm_pct, 0)))
+    ),
+    hours_learning: Math.max(0, Math.floor(num(j.hours_learning, 0))),
+    weak_topic_name:
+      typeof j.weak_topic_name === "string" ? j.weak_topic_name : "—",
+    weak_topic_mastery_pct: Math.max(
+      0,
+      Math.min(100, Math.round(num(j.weak_topic_mastery_pct, 0)))
+    ),
+    zones: zonesRaw.map(normalizeZone),
+    decks: decksRaw.map(normalizeDeck),
+  };
+}
+
 function truncateLabel(s: string, max = 18): string {
   const t = s.trim();
   if (t.length <= max) return t;
   return `${t.slice(0, max - 1)}…`;
+}
+
+function PageContent({ children }: { children: React.ReactNode }) {
+  return <div className="w-full min-w-0">{children}</div>;
 }
 
 export default function DashboardPage() {
@@ -57,8 +147,8 @@ export default function DashboardPage() {
       setError("Не удалось загрузить дашборд");
       return;
     }
-    const json = (await res.json()) as DashboardHomePayload;
-    setData(json);
+    const json: unknown = await res.json();
+    setData(normalizeDashboardPayload(json));
   }, [router]);
 
   useEffect(() => {
@@ -67,28 +157,26 @@ export default function DashboardPage() {
 
   if (!data && !error) {
     return (
-      <div className="min-h-screen bg-neutral-100 dark:bg-neutral-950">
-        <div className="mx-auto max-w-5xl px-5 py-6">
-          <div className="h-40 animate-pulse rounded-xl bg-neutral-200/80 dark:bg-neutral-800/80" />
-        </div>
-      </div>
+      <PageContent>
+        <div className="h-40 animate-pulse rounded-xl bg-neutral-200/80 dark:bg-neutral-800/80" />
+      </PageContent>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="min-h-screen bg-neutral-100 px-5 py-6 dark:bg-neutral-950">
-        <div className="mx-auto max-w-5xl text-sm text-red-600">
-          {error ?? "Неизвестная ошибка"}
-        </div>
-      </div>
+      <PageContent>
+        <p className="text-sm text-red-600">{error ?? "Неизвестная ошибка"}</p>
+      </PageContent>
     );
   }
 
   const riView = Math.round(
     Math.max(0, Math.min(100, data.readiness_index_view))
   );
-  const deltaRi = data.readiness_daily_delta;
+  const deltaRi = Number.isFinite(data.readiness_daily_delta)
+    ? data.readiness_daily_delta
+    : 0;
   const deltaLabel = `${deltaRi >= 0 ? "+" : ""}${deltaRi.toFixed(1)} сегодня`;
   const weakTopicShort = truncateLabel(data.weak_topic_name);
 
@@ -101,83 +189,89 @@ export default function DashboardPage() {
         : null;
 
   return (
-    <div className="min-h-screen bg-neutral-100 dark:bg-neutral-950">
-      <div className="mx-auto max-w-5xl px-5 py-6">
-        <div className="mb-4">
-          <h1 className="text-[20px] font-medium text-neutral-900 dark:text-neutral-100">
-            Добрый день, {data.user_name}
-          </h1>
-          <p className="mt-1 text-[12px] text-neutral-500">
-            {data.due_today_count} карточек на сегодня · стрик{" "}
-            {data.streak_days} дней
-          </p>
-        </div>
-
-        <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-          <MetricCard
-            label="Индекс готовности"
-            value={riView}
-            delta={deltaLabel}
-            deltaType={deltaRi >= 0 ? "up" : "neutral"}
-          />
-          <MetricCard
-            label="Точность ответов"
-            value={`${data.accuracy_week_pct}%`}
-            delta="за последние 7 дней"
-            deltaType="neutral"
-          />
-          <MetricCard
-            label="Карточек изучено"
-            value={data.total_cards_studied}
-            delta="всего"
-            deltaType="neutral"
-          />
-          <MetricCard
-            label={`Освоение ${weakTopicShort}`}
-            value={`${data.weak_topic_mastery_pct}%`}
-            delta="нужно внимание"
-            deltaType="warn"
-          />
-        </div>
-
-        <div className="mb-3 grid grid-cols-1 items-stretch gap-3 md:grid-cols-2">
-          <ReadinessCard
-            ri={riView}
-            mastery={data.mastery_avg_pct}
-            sigma={data.sigma_norm_pct}
-            hours={data.hours_learning}
-          />
-          <GrowthZonesCard
-            zones={data.zones.slice(0, 4)}
-            firstStudyHref={firstStudyHref}
-          />
-        </div>
-
-        <div>
-          <div className="mb-2.5 flex items-center justify-between">
-            <span className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
-              Колоды
-            </span>
-            <a
-              href="/dashboard/decks"
-              className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-700 dark:hover:text-neutral-300"
-            >
-              Все темы →
-            </a>
-          </div>
-          {data.decks.length === 0 ? (
-            <p className="text-[12px] text-neutral-500">
-              Колод пока нет. Создайте тему в разделе «Все темы».
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {data.decks.map((deck) => (
-                <DeckCard key={deck.id} deck={deck} />
-              ))}
-            </div>
-          )}
-        </div>
+    <PageContent>
+      <div className="mb-5">
+        <h1 className="text-[20px] font-medium text-neutral-900 dark:text-neutral-100">
+          Добрый день, {data.user_name}
+        </h1>
+        <p className="mt-1 text-[12px] text-neutral-500">
+          {data.due_today_count} карточек на сегодня · стрик{" "}
+          {data.streak_days} дней
+        </p>
       </div>
-    </div>
+
+      <div className="mb-4 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+        <MetricCard
+          label="Уровень знаний"
+          value={riView}
+          delta={deltaLabel}
+          deltaType={deltaRi >= 0 ? "up" : "neutral"}
+        />
+        <MetricCard
+          label="Точность ответов"
+          value={`${data.accuracy_week_pct}%`}
+          delta="за последние 7 дней"
+          deltaType="neutral"
+        />
+        <MetricCard
+          label="Карточек изучено"
+          value={data.total_cards_studied}
+          delta="всего"
+          deltaType="neutral"
+        />
+        <MetricCard
+          label={`Освоение ${weakTopicShort}`}
+          value={`${data.weak_topic_mastery_pct}%`}
+          delta="нужно внимание"
+          deltaType="warn"
+        />
+      </div>
+
+      <div className="mb-4 grid min-w-0 grid-cols-1 items-stretch gap-3 md:grid-cols-2">
+        <ReadinessCard
+          ri={riView}
+          mastery={data.mastery_avg_pct}
+          sigma={data.sigma_norm_pct}
+          hours={data.hours_learning}
+        />
+        <GrowthZonesCard
+          zones={data.zones.slice(0, 4)}
+          firstStudyHref={firstStudyHref}
+        />
+      </div>
+
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
+            Колоды
+          </span>
+          <Link
+            href="/dashboard/decks"
+            className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-700 dark:hover:text-neutral-300"
+          >
+            Все темы →
+          </Link>
+        </div>
+        {data.decks.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-neutral-300 p-8 text-center dark:border-neutral-700">
+            <p className="mb-3 text-[14px] text-neutral-500">
+              Колод пока нет
+            </p>
+            <Link
+              href="/dashboard/topics/create"
+              className="inline-block rounded-md bg-[#2F3437] px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-[0.85]"
+            >
+              Создать первую колоду →
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {data.decks.map((deck) => (
+              <DeckCard key={deck.id} deck={deck} />
+            ))}
+          </div>
+        )}
+      </div>
+    </PageContent>
   );
 }

@@ -80,7 +80,6 @@ export async function updateTopic(
     topic_display_name?: string | null;
     topic_description_text?: string | null;
     parent_subject_reference_id?: number | null;
-    is_public_visibility?: boolean | null;
   }
 ): Promise<TopicListItem> {
   const res = await fetch(`/api/content/topics/${topicId}`, {
@@ -128,5 +127,42 @@ export async function addCardsToTopic(
   return res.json() as Promise<{
     cards_created_count: number;
     card_unique_identifiers: number[];
+  }>;
+}
+
+function detailMessageFromResponse(e: unknown): string | null {
+  if (!e || typeof e !== "object") return null;
+  const d = (e as { detail?: unknown }).detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d) && d[0] && typeof d[0] === "object") {
+    const msg = (d[0] as { msg?: string }).msg;
+    if (typeof msg === "string") return msg;
+  }
+  return null;
+}
+
+export async function shareDeckByEmail(
+  deckId: number,
+  email: string
+): Promise<{
+  message: string;
+  topic_unique_identifier: number;
+  cards_copied_count: number;
+}> {
+  const res = await fetch(`/api/decks/${deckId}/share`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const msg =
+      detailMessageFromResponse(e) ?? "Не удалось отправить колоду";
+    throw new Error(msg);
+  }
+  return res.json() as Promise<{
+    message: string;
+    topic_unique_identifier: number;
+    cards_copied_count: number;
   }>;
 }

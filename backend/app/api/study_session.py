@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import statistics
 from datetime import datetime, timedelta
@@ -40,6 +41,55 @@ from app.services.user_analytics_service import refresh_user_global_stats
 
 logger = logging.getLogger(__name__)
 study_session_router = APIRouter(prefix="/study", tags=["Сессия обучения"])
+
+
+def _due_cards_queue_order_by():
+    """Приоритет очереди: last_Q≤1 (ошибки/слабо) → last_Q=3 (тяжело) → остальные; внутри — по next_review."""
+    lq = UserCardProgressModel.progress_last_quality_q
+    priority = case(
+        (lq.is_(None), 2),
+        (lq <= 1, 0),
+        (lq == 3, 1),
+        else_=2,
+    )
+    return (
+        priority.asc(),
+        func.coalesce(
+            UserCardProgressModel.progress_next_review_date,
+            datetime(1970, 1, 1),
+        ).asc(),
+        LearningCardModel.card_unique_identifier.asc(),
+    )
+
+
+def _fetch_last_successful_quality_q_for_card(
+    database_session_instance: Session,
+    user_id: int,
+    card_id: int,
+) -> int | None:
+    """Q последнего *верного* ответа по карточке (для Fast Track «два Q=5 подряд»)."""
+    row = database_session_instance.execute(
+        select(LearningInteractionModel)
+        .where(
+            LearningInteractionModel.interaction_owner_user_account_id == user_id,
+            LearningInteractionModel.interaction_target_card_unique_identifier
+            == card_id,
+            LearningInteractionModel.interaction_is_correct.is_(True),
+        )
+        .order_by(
+            LearningInteractionModel.interaction_timestamp.desc().nulls_last(),
+            LearningInteractionModel.interaction_unique_identifier.desc(),
+        )
+        .limit(1)
+    ).scalars().first()
+    if row is None:
+        return None
+    level = row.interaction_subjective_confidence_level
+    if level == UserSubjectiveConfidenceLevelEnum.easy:
+        return 5
+    if level == UserSubjectiveConfidenceLevelEnum.medium:
+        return 4
+    return 3
 
 
 def _get_topic_entropy_value_from_topic(topic_instance: object) -> float:
@@ -429,14 +479,16 @@ def _serialize_card_for_session(
 ) -> dict:
     topic = card.parent_topic
     subject = _subject_title_for_topic(database_session_instance, topic)
-    topic_title = topic.topic_display_name if topic else "Тема"
+    topic_title = (
+        (getattr(topic, "topic_display_name", None) or "Тема") if topic else "Тема"
+    )
     return {
         "card_id": card.card_unique_identifier,
-        "question_text": card.card_question_text_payload,
-        "answer_text": card.card_answer_text_payload,
+        "question_text": card.card_question_text_payload or "",
+        "answer_text": card.card_answer_text_payload or "",
         "card_type": card.card_type.value,
-        "topic_title": topic_title,
-        "subject": subject,
+        "topic_title": topic_title or "Тема",
+        "subject": subject or "Обучение",
     }
 
 
@@ -568,13 +620,7 @@ def study_session_next_card_endpoint(
             ),
         )
         .where(due_filter)
-        .order_by(
-            func.coalesce(
-                UserCardProgressModel.progress_next_review_date,
-                datetime(1970, 1, 1),
-            ).asc(),
-            LearningCardModel.card_unique_identifier.asc(),
-        )
+        .order_by(*_due_cards_queue_order_by())
         .limit(1)
     )
     row = database_connection_session.execute(stmt).scalars().first()
@@ -602,6 +648,44 @@ def study_session_next_card_endpoint(
             "cards_total": int(total_due),
         },
     }
+
+
+@study_session_router.get("/cards/today")
+def study_cards_due_today_list_endpoint(
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    GET /study/cards/today.
+    ID карточек к повторению сегодня в порядке очереди сессии (как у next-card).
+    """
+    user_id = authorized_student_user_account.user_unique_identifier
+    now = datetime.utcnow()
+    due_filter = and_(
+        LearningCardModel.owner_user_account_id == user_id,
+        or_(
+            UserCardProgressModel.progress_next_review_date.is_(None),
+            UserCardProgressModel.progress_next_review_date <= now,
+        ),
+    )
+    stmt = (
+        select(LearningCardModel.card_unique_identifier)
+        .select_from(LearningCardModel)
+        .outerjoin(
+            UserCardProgressModel,
+            and_(
+                UserCardProgressModel.progress_target_card_unique_identifier
+                == LearningCardModel.card_unique_identifier,
+                UserCardProgressModel.progress_owner_user_account_id == user_id,
+            ),
+        )
+        .where(due_filter)
+        .order_by(*_due_cards_queue_order_by())
+    )
+    rows = database_connection_session.execute(stmt).scalars().all()
+    return {"card_ids": [int(x) for x in rows], "total": len(rows)}
 
 
 @study_session_router.get("/topic/{topic_id}/next-card")
@@ -684,13 +768,7 @@ def study_session_next_card_for_topic_endpoint(
             ),
         )
         .where(due_filter)
-        .order_by(
-            func.coalesce(
-                UserCardProgressModel.progress_next_review_date,
-                datetime(1970, 1, 1),
-            ).asc(),
-            LearningCardModel.card_unique_identifier.asc(),
-        )
+        .order_by(*_due_cards_queue_order_by())
         .limit(1)
     )
     row = database_connection_session.execute(stmt).scalars().first()
@@ -854,6 +932,7 @@ def submit_user_answer_endpoint(
             "energy_left": remaining_user_cognitive_energy,
             "next_review": next_review_date_value,
             "new_mastery": new_mastery_value,
+            "fast_track_week": False,
             "topic_unique_identifier": getattr(
                 updated_learning_card_instance.parent_topic,
                 "topic_unique_identifier",
@@ -915,7 +994,16 @@ def submit_user_answer_endpoint(
                     ex=ttl_seconds_value,
                 )
 
-    calculated_new_easiness_factor, repetition_interval_days_count = run_sm2_step(
+    previous_success_q = _fetch_last_successful_quality_q_for_card(
+        database_connection_session,
+        user_id,
+        updated_learning_card_instance.card_unique_identifier,
+    )
+    (
+        calculated_new_easiness_factor,
+        repetition_interval_days_count,
+        fast_track_week_flag,
+    ) = run_sm2_step(
         confidence_score_q=int(calculated_question_quality_q_value),
         previous_easiness_factor_ef=_fetch_or_initialize_user_progress_easiness_factor(
             database_session_instance=database_connection_session,
@@ -928,6 +1016,7 @@ def submit_user_answer_endpoint(
         calculated_topic_entropy_value=topic_entropy_value_for_sm2,
         user_personal_forgetting_coefficient=user_personal_forgetting_lambda_from_account,
         response_thinking_time_ms=response_thinking_time_ms_value,
+        previous_success_quality_q=previous_success_q,
     )
 
     updated_next_review_datetime, updated_topic_mastery_average_int, previous_topic_mastery_average_value = (
@@ -966,6 +1055,7 @@ def submit_user_answer_endpoint(
         "energy_left": remaining_user_cognitive_energy,
         "next_review": updated_next_review_datetime.date(),
         "new_mastery": updated_topic_mastery_average_int,
+        "fast_track_week": bool(fast_track_week_flag),
         "topic_unique_identifier": int(
             updated_learning_card_instance.parent_topic_reference_id
         ),
@@ -1329,6 +1419,8 @@ def dashboard_home_endpoint(
     readiness_index_ri_value = float(
         authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
     )
+    if not math.isfinite(readiness_index_ri_value):
+        readiness_index_ri_value = 0.0
     readiness_index_view_value = max(
         0.0, min(100.0, readiness_index_ri_value / 10.0)
     )
@@ -1563,7 +1655,6 @@ def dashboard_home_endpoint(
             LearningTopicModel.topic_unique_identifier,
             LearningTopicModel.topic_display_name,
             LearningTopicModel.related_topics_count,
-            LearningTopicModel.is_public_visibility,
             func.avg(UserCardProgressModel.progress_mastery_level).label("avg_m"),
         )
         .join(
@@ -1584,7 +1675,6 @@ def dashboard_home_endpoint(
             LearningTopicModel.topic_unique_identifier,
             LearningTopicModel.topic_display_name,
             LearningTopicModel.related_topics_count,
-            LearningTopicModel.is_public_visibility,
         )
         .order_by(
             func.coalesce(
@@ -1603,7 +1693,6 @@ def dashboard_home_endpoint(
                 "id": int(dr.topic_unique_identifier),
                 "name": dr.topic_display_name,
                 "connections": int(dr.related_topics_count or 0),
-                "isPublic": bool(dr.is_public_visibility),
                 "mastery": int(round(max(0.0, min(100.0, avg_m)))),
             }
         )
@@ -1946,6 +2035,9 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
     existing_progress_record.progress_next_review_date = next_review_datetime_value
     existing_progress_record.progress_mastery_level = float(
         calculated_new_mastery_level_value
+    )
+    existing_progress_record.progress_last_quality_q = int(
+        calculated_question_quality_q_value
     )
     database_session_instance.add(existing_progress_record)
 

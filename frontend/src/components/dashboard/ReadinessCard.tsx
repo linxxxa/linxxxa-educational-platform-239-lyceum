@@ -1,3 +1,5 @@
+import { knowledgeLevelLabel } from "@/lib/knowledge-level";
+
 interface ReadinessCardProps {
   ri: number;
   mastery: number;
@@ -5,28 +7,34 @@ interface ReadinessCardProps {
   hours: number;
 }
 
+/** Длина дуги для r=28 в viewBox 72×72 */
+const RING_CIRCUMFERENCE = 2 * Math.PI * 28;
+
 export default function ReadinessCard({
   ri,
   mastery,
   sigma,
   hours,
 }: ReadinessCardProps) {
-  const circumference = 175.9;
   const riClamped = Math.max(0, Math.min(100, ri));
-  const offset = circumference * (1 - riClamped / 100);
+  const offset = RING_CIRCUMFERENCE * (1 - riClamped / 100);
+  const statusText = knowledgeLevelLabel(riClamped);
 
   return (
-    <div className="flex flex-col rounded-xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900">
-      <p className="mb-0.5 text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
-        Уровень готовности
-      </p>
-      <p className="mb-4 text-[11px] text-neutral-400">
-        Балл = 70% знания + 20% стабильность + 10% время
+    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-xl border border-neutral-200 bg-white p-4 sm:p-5 dark:border-neutral-800 dark:bg-neutral-900">
+      <p className="mb-4 overflow-hidden text-ellipsis whitespace-nowrap text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
+        Твой уровень знаний
       </p>
 
-      <div className="mb-4 flex items-center gap-4">
-        <div className="relative h-[72px] w-[72px] shrink-0">
-          <svg width="72" height="72" viewBox="0 0 72 72" className="block">
+      <div className="mb-4 flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+        <div className="relative h-40 w-40 shrink-0 lg:h-[200px] lg:w-[200px]">
+          <svg
+            width="100%"
+            height="100%"
+            viewBox="0 0 72 72"
+            className="block"
+            preserveAspectRatio="xMidYMid meet"
+          >
             <circle
               cx="36"
               cy="36"
@@ -43,42 +51,50 @@ export default function ReadinessCard({
               fill="none"
               strokeWidth="6"
               stroke="#2F3437"
-              strokeDasharray={circumference}
+              strokeDasharray={RING_CIRCUMFERENCE}
               strokeDashoffset={offset}
               strokeLinecap="round"
               transform="rotate(-90 36 36)"
             />
           </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[18px] font-medium leading-none text-neutral-900 dark:text-neutral-100">
+          <div className="absolute inset-0 flex flex-col items-center justify-center px-1">
+            <span className="text-[9px] font-medium uppercase tracking-wide text-neutral-400 sm:text-[10px]">
+              Текущий балл
+            </span>
+            <span className="text-[16px] font-medium leading-none text-neutral-900 sm:text-[18px] dark:text-neutral-100 lg:text-[20px]">
               {Math.round(riClamped)}
             </span>
-            <span className="mt-0.5 text-[9px] text-neutral-400">из 100</span>
+            <span className="mt-0.5 text-[8px] text-neutral-400 sm:text-[9px]">
+              из 100
+            </span>
           </div>
         </div>
 
-        <div className="flex flex-1 flex-col gap-2">
+        <div className="flex w-full min-w-0 flex-1 flex-col gap-2">
+          <p className="text-center text-[13px] font-medium leading-snug text-neutral-800 sm:text-left dark:text-neutral-200">
+            {statusText}
+          </p>
           {[
             {
-              label: "Знания (×700)",
+              label: "Освоение тем",
               value: `${mastery}%`,
               pct: Math.min(100, Math.max(0, mastery)),
             },
             {
-              label: "Стабильность (×200)",
+              label: "Стабильность ответов",
               value: `${sigma}%`,
               pct: Math.min(100, Math.max(0, sigma)),
             },
             {
-              label: "Время (×100)",
+              label: "Время занятий",
               value: `${hours}ч`,
               pct: Math.min(100, Math.max(0, hours * 3)),
             },
           ].map(({ label, value, pct }) => (
-            <div key={label}>
-              <div className="mb-1 flex justify-between">
+            <div key={label} className="w-full">
+              <div className="mb-1 flex justify-between gap-2">
                 <span className="text-[11px] text-neutral-500">{label}</span>
-                <span className="text-[11px] font-medium text-neutral-900 dark:text-neutral-100">
+                <span className="shrink-0 text-[11px] font-medium text-neutral-900 dark:text-neutral-100">
                   {value}
                 </span>
               </div>
@@ -94,8 +110,9 @@ export default function ReadinessCard({
       </div>
 
       <div className="mt-auto border-t border-neutral-100 pt-3 dark:border-neutral-800">
-        <p className="text-[10px] leading-relaxed text-neutral-400">
-          Твой прогноз · продолжай в том же темпе, чтобы достичь 60 к концу недели
+        <p className="text-[10px] leading-relaxed break-words text-neutral-400">
+          Балл из 100 учитывает освоение тем, стабильность ответов и время практики
+          — чем выше балл, тем увереннее прогноз на экзамен.
         </p>
       </div>
     </div>

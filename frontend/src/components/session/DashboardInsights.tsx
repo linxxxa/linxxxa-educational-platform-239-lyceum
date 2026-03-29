@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getToken } from "@/lib/auth";
+import { knowledgeLevelLabel } from "@/lib/knowledge-level";
 
 interface WeakTopic {
   topic_unique_identifier: number;
@@ -87,6 +88,11 @@ export default function DashboardInsights() {
     return raw;
   }, [data.readiness_index_ri, data.readiness_index_view]);
 
+  const levelStatus = useMemo(
+    () => knowledgeLevelLabel(displayRi),
+    [displayRi]
+  );
+
   if (loading) {
     return (
       <div className="grid gap-4 md:grid-cols-2">
@@ -100,16 +106,16 @@ export default function DashboardInsights() {
     <div className="grid gap-4 md:grid-cols-2">
       <section className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-8 dark:border-[#27272A] dark:bg-[#18181B]">
         <h2 className="font-[var(--font-geist-sans)] text-xl font-semibold tracking-[-0.02em] text-neutral-900 dark:text-neutral-100">
-          Уровень готовности
+          Твой уровень знаний
         </h2>
-        <div
-          className="mt-6 flex flex-col gap-6 sm:flex-row sm:items-start sm:gap-8"
-          title="Балл = 70% знания + 20% стабильность + 10% время"
-        >
+        <div className="mt-6 flex flex-col gap-6 sm:flex-row sm:items-start sm:gap-8">
           <div className="flex shrink-0 flex-col items-center sm:items-start">
             <div className="relative h-[128px] w-[128px]">
               <Ring value={ringValue} />
               <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-0.5 px-1">
+                <span className="text-center text-[9px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                  Текущий балл
+                </span>
                 <span className="text-center font-[var(--font-geist-mono)] text-2xl font-medium tabular-nums leading-tight text-neutral-900 dark:text-neutral-100">
                   {displayRi}
                   <span className="text-lg font-normal text-neutral-500 dark:text-neutral-400">
@@ -119,16 +125,15 @@ export default function DashboardInsights() {
                 </span>
               </div>
             </div>
-            <p className="mt-3 max-w-[220px] text-center text-xs leading-snug text-neutral-400 dark:text-neutral-500 sm:text-left">
-              Балл = 70% знания + 20% стабильность + 10% время. Веса 700 / 200 / 100 в
-              модели соответствуют долям 70/20/10.
+            <p className="mt-3 max-w-[260px] text-center text-sm font-medium leading-snug text-neutral-800 dark:text-neutral-200 sm:text-left">
+              {levelStatus}
             </p>
-            <p className="mt-2 font-[var(--font-geist-mono)] text-[10px] tracking-[0.08em] text-neutral-400 dark:text-neutral-500">
-              ТВОЙ ПРОГНОЗ
+            <p className="mt-2 max-w-[260px] text-center text-xs leading-snug text-neutral-400 dark:text-neutral-500 sm:text-left">
+              Балл из 100 учитывает освоение тем, стабильность ответов и время практики.
             </p>
           </div>
           <div className="min-w-0 flex-1 pt-0 sm:pt-1">
-            <div className="text-sm text-neutral-500">Прогресс за день</div>
+            <div className="text-sm text-neutral-500">Изменение за сегодня</div>
             <div className="mt-1 font-[var(--font-geist-mono)] text-sm tabular-nums text-neutral-700 dark:text-neutral-300">
               {data.readiness_daily_delta >= 0 ? "+" : ""}
               {data.readiness_daily_delta.toFixed(1)} за сегодня

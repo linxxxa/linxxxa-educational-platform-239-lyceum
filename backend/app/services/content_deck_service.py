@@ -2,12 +2,13 @@
 Транзакционное сохранение колоды: тема + карточки (239 Protocol).
 """
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.learning_card import LearningCardModel, LearningCardTypeEnum
 from app.models.learning_subject import LearningSubjectModel
 from app.models.learning_topic import LearningTopicModel
+from app.models.user_account import UserAccountModel
 from app.schemas.content import CardPayloadItem
 
 
@@ -51,7 +52,6 @@ def persist_deck_batch_transaction(
     parent_subject_reference_id: int,
     topic_title_name: str,
     topic_description_text: str | None,
-    is_public_visibility: bool,
     new_card_payload_collection: list[CardPayloadItem],
 ) -> tuple[LearningTopicModel, list[int]]:
     """
@@ -86,7 +86,6 @@ def persist_deck_batch_transaction(
         parent_subject_reference_id=parent_subject_reference_id,
         topic_owner_user_id=authorized_user_account_identifier,
         related_topics_count=concepts_n,
-        is_public_visibility=is_public_visibility,
     )
     database_session_instance.add(topic_row)
     database_session_instance.flush()
@@ -179,7 +178,6 @@ def update_topic_metadata_for_owner(
     topic_display_name: str | None,
     topic_description_text: str | None,
     parent_subject_reference_id: int | None,
-    is_public_visibility: bool | None,
 ) -> LearningTopicModel:
     topic = database_session_instance.get(LearningTopicModel, int(topic_unique_identifier))
     if topic is None:
@@ -198,8 +196,6 @@ def update_topic_metadata_for_owner(
         if int(subj.created_by_user_id) != int(authorized_user_account_identifier):
             raise HTTPException(status_code=403, detail="Нет доступа к этому предмету")
         topic.parent_subject_reference_id = int(parent_subject_reference_id)
-    if is_public_visibility is not None:
-        topic.is_public_visibility = bool(is_public_visibility)
 
     database_session_instance.add(topic)
     database_session_instance.commit()
@@ -277,3 +273,88 @@ def add_cards_to_topic_transaction(
     database_session_instance.add(topic)
     database_session_instance.commit()
     return card_ids
+
+
+USER_NOT_FOUND_SHARE_MESSAGE = (
+    "Пользователь не найден. Пригласите его в EduLab!"
+)
+
+
+def clone_topic_deck_share_to_recipient_by_email(
+    database_session_instance: Session,
+    *,
+    sharer_user_account_identifier: int,
+    source_topic_unique_identifier: int,
+    recipient_email_normalized: str,
+) -> LearningTopicModel:
+    """
+    Полная копия темы и карточек для другого пользователя.
+    Интервалы SM-2, прогресс и статистика не копируются (новые карточки с дефолтами).
+    """
+    topic = database_session_instance.get(
+        LearningTopicModel, int(source_topic_unique_identifier)
+    )
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Колода не найдена")
+    if int(topic.topic_owner_user_id or 0) != int(sharer_user_account_identifier):
+        raise HTTPException(status_code=403, detail="Нет доступа к этой колоде")
+
+    recipient_row = database_session_instance.execute(
+        select(UserAccountModel).where(
+            func.lower(UserAccountModel.user_email_address)
+            == recipient_email_normalized
+        )
+    ).scalars().first()
+    if recipient_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=USER_NOT_FOUND_SHARE_MESSAGE,
+        )
+    if int(recipient_row.user_unique_identifier) == int(
+        sharer_user_account_identifier
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя отправить колоду самому себе",
+        )
+
+    source_cards = list(
+        database_session_instance.execute(
+            select(LearningCardModel).where(
+                LearningCardModel.parent_topic_reference_id
+                == int(source_topic_unique_identifier),
+                LearningCardModel.owner_user_account_id
+                == int(sharer_user_account_identifier),
+            )
+        ).scalars().all()
+    )
+
+    new_topic = LearningTopicModel(
+        topic_display_name=topic.topic_display_name,
+        topic_description_text=topic.topic_description_text,
+        topic_entropy_complexity_value=float(
+            topic.topic_entropy_complexity_value or 0.0
+        ),
+        topic_entropy_value=float(topic.topic_entropy_value or 0.0),
+        related_topics_count=len(source_cards),
+        parent_topic_reference_identifier=None,
+        parent_subject_reference_id=None,
+        topic_owner_user_id=int(recipient_row.user_unique_identifier),
+    )
+    database_session_instance.add(new_topic)
+    database_session_instance.flush()
+
+    for card in source_cards:
+        database_session_instance.add(
+            LearningCardModel(
+                owner_user_account_id=int(recipient_row.user_unique_identifier),
+                parent_topic_reference_id=int(new_topic.topic_unique_identifier),
+                card_question_text_payload=card.card_question_text_payload,
+                card_answer_text_payload=card.card_answer_text_payload,
+                card_type=card.card_type,
+            )
+        )
+
+    database_session_instance.commit()
+    database_session_instance.refresh(new_topic)
+    return new_topic

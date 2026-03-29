@@ -37,6 +37,8 @@ class UserCardProgressModel(Base_Model_Declarative_Root):
     progress_interval_days = Column(Integer, nullable=False, default=1)
     progress_next_review_date = Column(DateTime, nullable=True, index=True)
     progress_mastery_level = Column(Float, nullable=False, default=0.0)
+    # Последнее Q (0–5) по ответу на карточку — для очереди сессии и Fast Track.
+    progress_last_quality_q = Column(Integer, nullable=True)
 
     __table_args__ = (
         Index(

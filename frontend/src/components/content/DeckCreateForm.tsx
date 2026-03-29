@@ -32,7 +32,6 @@ export function DeckCreateForm() {
   const [subjectModalOpen, setSubjectModalOpen] = useState(false);
   const [topicTitle, setTopicTitle] = useState("");
   const [topicDesc, setTopicDesc] = useState("");
-  const [isPublic, setIsPublic] = useState(true);
   const [cards, setCards] = useState<CardPayloadItem[]>([]);
   const [cardErrors, setCardErrors] = useState<
     Record<number, { question?: string; answer?: string }>
@@ -162,7 +161,6 @@ export function DeckCreateForm() {
         parent_subject_reference_id: sid,
         topic_title_name: topicTitle.trim(),
         topic_description_text: topicDesc.trim() || null,
-        is_public_visibility: isPublic,
         new_card_payload_collection: filled,
       });
       router.push("/dashboard/topics");
@@ -283,28 +281,6 @@ export function DeckCreateForm() {
                 onChange={(e) => setTopicDesc(e.target.value)}
                 className="h-10 w-full rounded-md border border-neutral-200 px-3 text-[13px] dark:border-neutral-700 dark:bg-neutral-950"
               />
-            </div>
-            <div className="flex items-end md:col-span-2">
-              <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-neutral-200 px-4 py-3 dark:border-neutral-700">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={isPublic}
-                  onClick={() => setIsPublic((v) => !v)}
-                  className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
-                    isPublic ? "bg-emerald-600" : "bg-neutral-300 dark:bg-neutral-600"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                      isPublic ? "translate-x-5" : "translate-x-0"
-                    }`}
-                  />
-                </button>
-                <span className="text-[13px] text-neutral-800 dark:text-neutral-200">
-                  Сделать тему публичной
-                </span>
-              </label>
             </div>
           </div>
         </section>

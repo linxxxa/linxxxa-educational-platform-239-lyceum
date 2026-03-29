@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
-import { PageWrapper } from "@/components/layout";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,8 +32,8 @@ export default function RootLayout({
       lang="ru"
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col font-[var(--font-inter)] tracking-[-0.011em]">
-        <PageWrapper>{children}</PageWrapper>
+      <body className="min-h-full flex flex-col bg-neutral-100 font-[var(--font-inter)] tracking-[-0.011em] dark:bg-neutral-950">
+        {children}
       </body>
     </html>
   );

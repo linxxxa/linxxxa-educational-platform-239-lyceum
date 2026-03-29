@@ -13,6 +13,7 @@ from app.database import (
 from app.db_schema_patches import (
     apply_learning_cards_schema_patch,
     apply_learning_topics_schema_patch,
+    apply_progress_last_quality_q_schema_patch,
 )
 # Импорт моделей ДО роутеров — иначе SQLAlchemy не разрешит relationship
 from app.models.user_account import UserAccountModel
@@ -64,3 +65,4 @@ fastapi_application.include_router(learning_content_router)
 Base_Model_Declarative_Root.metadata.create_all(bind=platform_database_engine)
 apply_learning_topics_schema_patch(platform_database_engine)
 apply_learning_cards_schema_patch(platform_database_engine)
+apply_progress_last_quality_q_schema_patch(platform_database_engine)

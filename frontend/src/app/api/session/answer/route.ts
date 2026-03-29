@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
     energy_left?: number;
     next_review?: string;
     new_mastery?: number;
+    fast_track_week?: boolean;
     topic_unique_identifier?: number | null;
     topic_display_name?: string | null;
     topic_mastery_before?: number | null;
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
     energy,
     next_review: data.next_review,
     new_mastery: data.new_mastery,
+    fast_track_week: data.fast_track_week === true,
     topic_unique_identifier: data.topic_unique_identifier,
     topic_display_name: data.topic_display_name,
     topic_mastery_before: data.topic_mastery_before,

@@ -30,7 +30,6 @@ export default function TopicsListPage() {
   const [editing, setEditing] = useState<TopicListItem | null>(null);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState<string>("");
-  const [editPublic, setEditPublic] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -147,9 +146,6 @@ export default function TopicsListPage() {
                     </div>
                     <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-neutral-500">
                       <span>ID темы: {t.topic_unique_identifier}</span>
-                      <span>
-                        {t.is_public_visibility ? "Публичная" : "Приватная"}
-                      </span>
                       <span>K связей: {t.related_topics_count}</span>
                     </div>
                   </div>
@@ -166,7 +162,6 @@ export default function TopicsListPage() {
                         setEditing(t);
                         setEditName(t.topic_display_name);
                         setEditDesc(t.topic_description_text ?? "");
-                        setEditPublic(Boolean(t.is_public_visibility));
                       }}
                       className="rounded-md border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-700 hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-800"
                     >
@@ -219,7 +214,7 @@ export default function TopicsListPage() {
                 Редактировать колоду
               </h2>
               <p className="text-[12px] text-neutral-500">
-                Изменение названия/описания и приватности.
+                Изменение названия и описания.
               </p>
             </div>
 
@@ -241,15 +236,6 @@ export default function TopicsListPage() {
               className="min-h-[90px] w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] dark:border-neutral-800 dark:bg-neutral-900"
             />
 
-            <label className="mt-4 flex items-center gap-2 text-[13px] text-neutral-700 dark:text-neutral-200">
-              <input
-                type="checkbox"
-                checked={editPublic}
-                onChange={(e) => setEditPublic(e.target.checked)}
-              />
-              Публичная колода
-            </label>
-
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"
@@ -269,7 +255,6 @@ export default function TopicsListPage() {
                     await updateTopic(editing.topic_unique_identifier, {
                       topic_display_name: editName,
                       topic_description_text: editDesc,
-                      is_public_visibility: editPublic,
                     });
                     setEditing(null);
                     await load();

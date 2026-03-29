@@ -23,14 +23,14 @@ function FormulaBlock({ latex }: { latex: string }) {
 
 export default function CardQuestion({ card, onShowAnswer }: Props) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-7 dark:border-neutral-800 dark:bg-neutral-900">
+    <div className="min-w-0 rounded-xl border border-neutral-200 bg-white p-7 dark:border-neutral-800 dark:bg-neutral-900">
       <div className="mb-5 flex items-center justify-between">
         <span className="text-[12px] capitalize text-neutral-500">
           {card.card_type}
         </span>
       </div>
 
-      <p className="mb-6 text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+      <p className="mb-6 break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
         {card.question_text}
       </p>
 

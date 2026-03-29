@@ -131,7 +131,7 @@ def process_user_answer_impact(
         )
     )
 
-    new_ef, interval_days = run_sm2_step(
+    new_ef, interval_days, _fast_track_week = run_sm2_step(
         confidence_score_q=int(confidence_score_q),
         previous_easiness_factor_ef=float(
             getattr(card_object, "card_easiness_factor_ef", 2.5)
@@ -145,6 +145,7 @@ def process_user_answer_impact(
         calculated_topic_entropy_value=topic_entropy_value,
         user_personal_forgetting_coefficient=user_personal_forgetting_coefficient,
         response_thinking_time_ms=thinking_time_tau_ms,
+        previous_success_quality_q=None,
     )
 
     card_object.card_easiness_factor_ef = max(

@@ -61,7 +61,7 @@ export default function RegisterForm() {
 
     if (data.access_token) {
       saveToken(data.access_token);
-      router.push("/dashboard");
+      router.replace("/");
     } else if (data.errors?.general) {
       setErrors(data.errors);
     } else {

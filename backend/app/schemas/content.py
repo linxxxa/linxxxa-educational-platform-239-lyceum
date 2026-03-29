@@ -1,6 +1,7 @@
 """Схемы контент-модуля (Subjects, Topics, Cards) — 239 Protocol DTO."""
 from typing import Literal
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -54,7 +55,6 @@ class DeckBatchSaveRequest(BaseModel):
     parent_subject_reference_id: int
     topic_title_name: str
     topic_description_text: str | None = None
-    is_public_visibility: bool = True
     new_card_payload_collection: list[CardPayloadItem] = Field(min_length=1)
 
     @field_validator("topic_title_name")
@@ -73,7 +73,6 @@ class TopicUpdateRequest(BaseModel):
     topic_display_name: str | None = None
     topic_description_text: str | None = None
     parent_subject_reference_id: int | None = None
-    is_public_visibility: bool | None = None
 
     @field_validator("topic_display_name")
     @classmethod
@@ -91,3 +90,21 @@ class TopicCardsBatchAddRequest(BaseModel):
     """Пакетное добавление карточек в существующую колоду."""
 
     new_card_payload_collection: list[CardPayloadItem] = Field(min_length=1)
+
+
+class DeckShareByEmailRequest(BaseModel):
+    """Отправка копии колоды другому пользователю по email."""
+
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def normalize_and_validate_email(cls, v: str) -> str:
+        s = v.strip()
+        if len(s) < 5 or len(s) > 255:
+            raise ValueError("Email должен быть от 5 до 255 символов")
+        try:
+            validate_email(s, check_deliverability=False)
+        except EmailNotValidError:
+            raise ValueError("Некорректный формат email") from None
+        return s.lower()

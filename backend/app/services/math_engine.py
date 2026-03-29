@@ -155,14 +155,20 @@ def run_sm2_step(
     calculated_topic_entropy_value: float,
     user_personal_forgetting_coefficient: float,
     response_thinking_time_ms: float,
-) -> tuple[float, int]:
-    """Шаг SM-2 по 239-протоколу: сложность = динамика (H(T), λi, Q)."""
+    *,
+    previous_success_quality_q: int | None = None,
+) -> tuple[float, int, bool]:
+    """Шаг SM-2 по 239-протоколу: сложность = динамика (H(T), λi, Q).
+
+    Возвращает (новый EF, интервал в днях, fast_track_week).
+    Fast Track (Q=5): первый успех → 2 дня; второй подряд успех с Q=5 → 7 дней.
+    """
     # response_thinking_time_ms влияет на λi,
     # поэтому здесь не используется напрямую.
     _ = response_thinking_time_ms
-    _ = repetition_sequence_number
 
     confidence_score_q_value = max(0, min(5, int(confidence_score_q)))
+    repetition_n = max(0, int(repetition_sequence_number))
 
     # По протоколу 239: если Q < 3 (низкое качество/неверно),
     # интервал принудительно
@@ -178,6 +184,16 @@ def run_sm2_step(
     calculated_new_easiness_factor = max(
         1.3, min(2.5, calculated_new_easiness_factor)
     )
+
+    if confidence_score_q_value == 5 and not q_is_low_value:
+        if repetition_n == 0:
+            return calculated_new_easiness_factor, 2, False
+        if (
+            repetition_n == 1
+            and previous_success_quality_q is not None
+            and int(previous_success_quality_q) == 5
+        ):
+            return calculated_new_easiness_factor, 7, True
 
     # Mcomplexity = 1 + H(T) ⋅ 0.51
     entropy_driven_interval_compression = (
@@ -201,7 +217,7 @@ def run_sm2_step(
     modified_repetition_interval = (
         1 if q_is_low_value else max(1, round(interval_days_float))
     )
-    return calculated_new_easiness_factor, modified_repetition_interval
+    return calculated_new_easiness_factor, modified_repetition_interval, False
 
 
 def calculate_session_delta_t_hours(

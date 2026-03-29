@@ -52,7 +52,7 @@ export default function LoginForm() {
 
     if (data.access_token) {
       saveToken(data.access_token);
-      router.push("/dashboard");
+      router.replace("/");
     } else {
       setErrors({ general: "Не удалось получить токен" });
     }

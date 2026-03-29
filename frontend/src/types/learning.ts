@@ -27,7 +27,6 @@ export interface DeckBatchSaveRequest {
   parent_subject_reference_id: number;
   topic_title_name: string;
   topic_description_text?: string | null;
-  is_public_visibility: boolean;
   new_card_payload_collection: CardPayloadItem[];
 }
 
@@ -36,6 +35,5 @@ export interface TopicListItem {
   topic_display_name: string;
   topic_description_text: string | null;
   parent_subject_reference_id: number | null;
-  is_public_visibility: boolean;
   related_topics_count: number;
 }

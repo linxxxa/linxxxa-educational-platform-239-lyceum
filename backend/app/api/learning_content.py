@@ -7,6 +7,7 @@ from app.database import get_database_session_generator
 from app.models.user_account import UserAccountModel
 from app.schemas.content import (
     DeckBatchSaveRequest,
+    DeckShareByEmailRequest,
     LearningSubjectResponseSchema,
     SubjectMetadataTransferObject,
     TopicCardsBatchAddRequest,
@@ -14,6 +15,7 @@ from app.schemas.content import (
 )
 from app.services.content_deck_service import (
     add_cards_to_topic_transaction,
+    clone_topic_deck_share_to_recipient_by_email,
     create_learning_subject_and_persist,
     fetch_subjects_owned_by_user,
     fetch_topics_for_user_optional_subject,
@@ -86,7 +88,6 @@ def save_deck_batch_endpoint(
         body.parent_subject_reference_id,
         body.topic_title_name,
         body.topic_description_text,
-        body.is_public_visibility,
         body.new_card_payload_collection,
     )
     return {
@@ -115,7 +116,6 @@ def list_topics_for_dashboard_endpoint(
             "topic_display_name": r.topic_display_name,
             "topic_description_text": r.topic_description_text,
             "parent_subject_reference_id": r.parent_subject_reference_id,
-            "is_public_visibility": r.is_public_visibility,
             "related_topics_count": r.related_topics_count,
         }
         for r in rows
@@ -137,14 +137,12 @@ def update_topic_endpoint(
         topic_display_name=body.topic_display_name,
         topic_description_text=body.topic_description_text,
         parent_subject_reference_id=body.parent_subject_reference_id,
-        is_public_visibility=body.is_public_visibility,
     )
     return {
         "topic_unique_identifier": row.topic_unique_identifier,
         "topic_display_name": row.topic_display_name,
         "topic_description_text": row.topic_description_text,
         "parent_subject_reference_id": row.parent_subject_reference_id,
-        "is_public_visibility": row.is_public_visibility,
         "related_topics_count": row.related_topics_count,
     }
 
@@ -179,3 +177,24 @@ def add_cards_to_topic_endpoint(
         new_card_payload_collection=body.new_card_payload_collection,
     )
     return {"cards_created_count": len(ids), "card_unique_identifiers": ids}
+
+
+@learning_content_router.post("/topics/{topic_id}/share", status_code=201)
+def share_topic_deck_clone_by_email_endpoint(
+    topic_id: int,
+    body: DeckShareByEmailRequest,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
+):
+    """Клонирует колоду (тему + карточки) для пользователя с указанным email."""
+    new_topic = clone_topic_deck_share_to_recipient_by_email(
+        database_connection_session,
+        sharer_user_account_identifier=authorized_user.user_unique_identifier,
+        source_topic_unique_identifier=int(topic_id),
+        recipient_email_normalized=body.email,
+    )
+    return {
+        "message": "Колода отправлена",
+        "topic_unique_identifier": new_topic.topic_unique_identifier,
+        "cards_copied_count": int(new_topic.related_topics_count or 0),
+    }

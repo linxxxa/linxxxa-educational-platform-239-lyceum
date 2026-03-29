@@ -3,8 +3,9 @@ export interface Card {
   question_text: string;
   answer_text: string;
   card_type: "понятие" | "формула" | "задача";
-  topic_title: string;
-  subject: string;
+  /** Могут отсутствовать в ответе API — SessionProgress подставляет пустую подпись */
+  topic_title?: string | null;
+  subject?: string | null;
 }
 
 export interface SessionState {

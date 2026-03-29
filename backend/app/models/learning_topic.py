@@ -3,7 +3,7 @@
 topic_entropy_complexity_value (H(T)) участвует в расчёте сложности карточек
 и влияет на модифицированный SM-2 (множитель M(complexity)).
 """
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String
+from sqlalchemy import Column, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.database import Base_Model_Declarative_Root
@@ -12,8 +12,7 @@ from app.database import Base_Model_Declarative_Root
 class LearningTopicModel(Base_Model_Declarative_Root):
     """
     Таблица тем обучения с древовидной структурой.
-    topic_owner_user_id: привязка к автору; null — системная (общая) тема.
-    Позволяет разграничивать личные и общие темы, делиться тестами.
+    topic_owner_user_id: привязка к автору; null — системная тема.
     """
     __tablename__ = "learning_topics"
 
@@ -45,7 +44,6 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         nullable=True,
         index=True,
     )
-    is_public_visibility = Column(Boolean, nullable=False, default=True)
 
     parent_subject = relationship(
         "LearningSubjectModel",

@@ -39,15 +39,15 @@ export default function GrowthZonesCard({
   firstStudyHref,
 }: GrowthZonesCardProps) {
   return (
-    <div className="flex flex-col rounded-xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900">
-      <p className="mb-0.5 text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
+    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-xl border border-neutral-200 bg-white p-4 sm:p-5 dark:border-neutral-800 dark:bg-neutral-900">
+      <p className="mb-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
         Зоны роста
       </p>
       <p className="mb-4 text-[11px] text-neutral-400">
         Темы с наибольшим отставанием
       </p>
 
-      <div className="flex flex-1 flex-col gap-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
         {zones.length === 0 ? (
           <p className="text-[12px] text-neutral-500">
             Пока нет данных по темам — начните с колод ниже.
@@ -56,13 +56,13 @@ export default function GrowthZonesCard({
           zones.map((zone) => (
             <div
               key={zone.topic_id ?? zone.name}
-              className="flex items-center gap-3 rounded-lg border border-neutral-100 p-2.5 dark:border-neutral-800"
+              className="flex min-w-0 items-center gap-3 rounded-lg border border-neutral-100 p-2.5 dark:border-neutral-800"
             >
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[12px] font-medium text-neutral-900 dark:text-neutral-100">
                   {zone.name}
                 </p>
-                <p className="mt-0.5 text-[10px] text-neutral-400">
+                <p className="mt-0.5 truncate text-[10px] text-neutral-400">
                   Освоено {zone.mastery}% · сложность{" "}
                   {zone.complexity.toFixed(2)}
                 </p>
@@ -77,7 +77,7 @@ export default function GrowthZonesCard({
                 </div>
               </div>
               <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium ${cfg[zone.status].badge}`}
+                className={`shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[9px] font-medium ${cfg[zone.status].badge}`}
               >
                 {cfg[zone.status].label}
               </span>

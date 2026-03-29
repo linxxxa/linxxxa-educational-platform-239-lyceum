@@ -326,22 +326,25 @@ def handle_card_answer(
                 user_unique_identifier=user_id,
             )
         )
-        calculated_new_easiness_factor, modified_repetition_interval = (
-            run_sm2_step(
-                confidence_score_q=calculated_quality_q_value,
-                previous_easiness_factor_ef=float(
-                    learning_card_instance.card_easiness_factor_ef
-                ),
-                repetition_sequence_number=int(
-                    learning_card_instance.card_repetition_sequence_number
-                ),
-                previous_interval_days_count=int(
-                    learning_card_instance.card_last_interval_days
-                ),
-                calculated_topic_entropy_value=calculated_topic_entropy_value,
-                user_personal_forgetting_coefficient=user_personal_forgetting_coefficient_value,
-                response_thinking_time_ms=response_time_ms_value,
-            )
+        (
+            calculated_new_easiness_factor,
+            modified_repetition_interval,
+            _fast_track_week,
+        ) = run_sm2_step(
+            confidence_score_q=calculated_quality_q_value,
+            previous_easiness_factor_ef=float(
+                learning_card_instance.card_easiness_factor_ef
+            ),
+            repetition_sequence_number=int(
+                learning_card_instance.card_repetition_sequence_number
+            ),
+            previous_interval_days_count=int(
+                learning_card_instance.card_last_interval_days
+            ),
+            calculated_topic_entropy_value=calculated_topic_entropy_value,
+            user_personal_forgetting_coefficient=user_personal_forgetting_coefficient_value,
+            response_thinking_time_ms=response_time_ms_value,
+            previous_success_quality_q=None,
         )
         logger.info(
             "SM2 update: user_id=%s card_id=%s new_EF=%s interval_days=%s H(T)=%s lambda_i=%s",
