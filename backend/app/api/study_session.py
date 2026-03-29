@@ -188,6 +188,81 @@ def _calculate_dynamic_topic_entropy_value_from_history(
     )
 
 
+def _topic_last_interaction_times_map(
+    database_connection_session: Session,
+    user_id: int,
+) -> dict[int, datetime]:
+    """Макс. interaction_timestamp по теме (через карточки)."""
+    rows = database_connection_session.execute(
+        select(
+            LearningCardModel.parent_topic_reference_id,
+            func.max(LearningInteractionModel.interaction_timestamp),
+        )
+        .join(
+            LearningInteractionModel,
+            LearningInteractionModel.interaction_target_card_unique_identifier
+            == LearningCardModel.card_unique_identifier,
+        )
+        .where(
+            LearningInteractionModel.interaction_owner_user_account_id == user_id,
+            LearningInteractionModel.interaction_timestamp.isnot(None),
+        )
+        .group_by(LearningCardModel.parent_topic_reference_id)
+    ).all()
+    out: dict[int, datetime] = {}
+    for topic_id, ts in rows:
+        if topic_id is not None and ts is not None:
+            out[int(topic_id)] = ts
+    return out
+
+
+def _weak_topics_with_decay(
+    database_connection_session: Session,
+    user_id: int,
+    weak_rows,
+) -> list[dict]:
+    """
+    Темы с учётом затухания освоения; только M_current < 80%;
+    сортировка: сначала минимальное освоение, при равенстве — выше H(T).
+    """
+    from app.services.mastery_decay import decay_mastery_ebbinghaus, hours_since_last_utc
+
+    last_map = _topic_last_interaction_times_map(
+        database_connection_session, user_id
+    )
+    now_utc = datetime.utcnow()
+    items: list[dict] = []
+    for row in weak_rows:
+        topic_model = database_connection_session.get(
+            LearningTopicModel, int(row.topic_unique_identifier)
+        )
+        if topic_model is None:
+            continue
+        entropy_value = _calculate_dynamic_topic_entropy_value_from_history(
+            database_session_instance=database_connection_session,
+            user_id=user_id,
+            topic_instance=topic_model,
+        )
+        avg_mastery_value = float(row.avg_mastery or 0.0)
+        complexity_h = float(topic_model.topic_entropy_complexity_value or 1.2)
+        tid = int(row.topic_unique_identifier)
+        hours = hours_since_last_utc(last_map.get(tid), now_utc)
+        m_curr = decay_mastery_ebbinghaus(avg_mastery_value, hours, complexity_h)
+        items.append(
+            {
+                "topic_unique_identifier": tid,
+                "topic_display_name": row.topic_display_name,
+                "entropy": entropy_value,
+                "avg_mastery": avg_mastery_value,
+                "current_mastery": m_curr,
+                "complexity_h": complexity_h,
+            }
+        )
+    items = [x for x in items if x["current_mastery"] < 80.0]
+    items.sort(key=lambda x: (x["current_mastery"], -x["complexity_h"]))
+    return items
+
+
 def _fetch_card_and_validate_ownership(
     database_session_instance: Session,
     card_identifier: int,
@@ -456,6 +531,44 @@ def _get_session_cards_done_redis(user_id: int) -> int:
         return 0
     v = r.get(f"session:{user_id}:cards_done")
     return int(v) if v is not None else 0
+
+
+def _aggregate_session_accuracy_since_started_ts(
+    database_session_instance: Session,
+    user_id: int,
+    started_ts: float,
+) -> tuple[int, int, int]:
+    """
+    Точность сессии из БД: (всего ответов, верных, сумма τ в мс) с момента started_ts.
+    Надёжнее Redis и не ломается на пустом payload.interactions.
+    """
+    if started_ts <= 0:
+        return 0, 0, 0
+    started_naive = datetime.utcfromtimestamp(float(started_ts))
+    correct_sum_expr = func.sum(
+        case(
+            (LearningInteractionModel.interaction_is_correct.is_(True), 1),
+            else_=0,
+        )
+    )
+    row = database_session_instance.execute(
+        select(
+            func.count(LearningInteractionModel.interaction_unique_identifier),
+            correct_sum_expr,
+            func.coalesce(
+                func.sum(LearningInteractionModel.interaction_response_time_ms),
+                0,
+            ),
+        ).where(
+            LearningInteractionModel.interaction_owner_user_account_id == user_id,
+            LearningInteractionModel.interaction_timestamp.isnot(None),
+            LearningInteractionModel.interaction_timestamp >= started_naive,
+        )
+    ).one()
+    total = int(row[0] or 0)
+    correct = int(row[1] or 0)
+    ms = int(row[2] or 0)
+    return total, correct, ms
 
 
 def _subject_title_for_topic(
@@ -1121,9 +1234,10 @@ def finish_session_endpoint(
     POST /study/session-finish.
     Возвращает summary с η, ΔRI, точностью и временем сессии.
 
-    Если передан ``payload.interactions``, точность и суммарное время
-    раздумий берутся оттуда (надёжно при отключённом Redis).
-    ``ri_before_snapshot`` фиксирует RI в начале сессии для ΔRI.
+    Точность и суммарное τ: при непустом ``payload.interactions`` — с клиента;
+    иначе агрегат из БД с ``started_at_ts`` (Redis может быть пуст/рассинхрон).
+    Пустой список ``interactions`` не затирает счётчики Redis.
+    ``ri_before_snapshot`` — RI на старт сессии для ΔRI.
     """
     user_id = authorized_student_user_account.user_unique_identifier
     redis_client = _redis_client_optional()
@@ -1157,12 +1271,27 @@ def finish_session_endpoint(
         started_ts = float(payload.started_at_ts)
 
     total_response_time_ms = 0
-    if payload is not None and payload.interactions is not None:
+    use_client_interactions = (
+        payload is not None
+        and payload.interactions is not None
+        and len(payload.interactions) > 0
+    )
+    if use_client_interactions:
         answers_total = len(payload.interactions)
         answers_correct = sum(1 for x in payload.interactions if x.is_correct)
         total_response_time_ms = int(
             sum(int(x.response_time_ms) for x in payload.interactions)
         )
+    else:
+        db_tot, db_cor, db_ms = _aggregate_session_accuracy_since_started_ts(
+            database_connection_session,
+            user_id,
+            started_ts,
+        )
+        if db_tot > 0:
+            answers_total = db_tot
+            answers_correct = db_cor
+            total_response_time_ms = db_ms
 
     now_ts = datetime.utcnow().timestamp()
     session_hours = max(0.0, (now_ts - started_ts) / 3600.0)
@@ -1364,36 +1493,26 @@ def dashboard_insights_endpoint(
         .limit(24)
     )
     weak_topics_rows = database_connection_session.execute(weak_topics_query).all()
-
-    weak_topics = []
-    for row in weak_topics_rows:
-        topic_model = database_connection_session.get(
-            LearningTopicModel, int(row.topic_unique_identifier)
-        )
-        if topic_model is None:
-            continue
-        entropy_value = _calculate_dynamic_topic_entropy_value_from_history(
-            database_session_instance=database_connection_session,
-            user_id=user_id,
-            topic_instance=topic_model,
-        )
-        avg_mastery_value = float(row.avg_mastery or 0.0)
-        weak_topics.append(
-            {
-                "topic_unique_identifier": int(row.topic_unique_identifier),
-                "topic_display_name": row.topic_display_name,
-                "entropy": entropy_value,
-                "avg_mastery": avg_mastery_value,
-            }
-        )
-
-    weak_topics.sort(key=lambda item: (-item["entropy"], item["avg_mastery"]))
+    weak_topics_decayed = _weak_topics_with_decay(
+        database_connection_session, user_id, weak_topics_rows
+    )
+    weak_topics_out = [
+        {
+            "topic_unique_identifier": wt["topic_unique_identifier"],
+            "topic_display_name": wt["topic_display_name"],
+            "entropy": wt["entropy"],
+            "avg_mastery": wt["avg_mastery"],
+            "current_mastery": round(float(wt["current_mastery"]), 2),
+            "topic_complexity": round(float(wt["complexity_h"]), 2),
+        }
+        for wt in weak_topics_decayed[:6]
+    ]
 
     return {
         "readiness_index_ri": readiness_index_ri_value,
         "readiness_index_view": readiness_index_view_value,
         "readiness_daily_delta": daily_delta,
-        "weak_topics": weak_topics[:6],
+        "weak_topics": weak_topics_out,
     }
 
 
@@ -1556,11 +1675,10 @@ def dashboard_home_endpoint(
     else:
         mastery_mean = 0.0
         mastery_std = 0.0
-    sigma_norm = max(0.0, 1.0 - mastery_std / 25.0)
+    sigma_norm = max(0.0, 1.0 - mastery_std / 30.0)
     hours_val = float(authorized_student_user_account.total_learning_hours or 0.0)
     mastery_avg_pct = int(round(max(0.0, min(100.0, mastery_mean))))
     sigma_norm_pct = int(round(max(0.0, min(100.0, sigma_norm * 100.0))))
-    hours_rounded = int(round(hours_val))
 
     weak_topics_query = (
         select(
@@ -1602,37 +1720,17 @@ def dashboard_home_endpoint(
         .limit(24)
     )
     weak_rows = database_connection_session.execute(weak_topics_query).all()
-
-    weak_topics: list[dict] = []
-    for row in weak_rows:
-        topic_model = database_connection_session.get(
-            LearningTopicModel, int(row.topic_unique_identifier)
-        )
-        if topic_model is None:
-            continue
-        entropy_value = _calculate_dynamic_topic_entropy_value_from_history(
-            database_session_instance=database_connection_session,
-            user_id=user_id,
-            topic_instance=topic_model,
-        )
-        avg_mastery_value = float(row.avg_mastery or 0.0)
-        weak_topics.append(
-            {
-                "topic_unique_identifier": int(row.topic_unique_identifier),
-                "topic_display_name": row.topic_display_name,
-                "entropy": entropy_value,
-                "avg_mastery": avg_mastery_value,
-            }
-        )
-    weak_topics.sort(key=lambda item: (-item["entropy"], item["avg_mastery"]))
+    weak_topics_decayed = _weak_topics_with_decay(
+        database_connection_session, user_id, weak_rows
+    )
 
     zones_out: list[dict] = []
-    for wt in weak_topics[:6]:
-        m_int = int(round(max(0.0, min(100.0, wt["avg_mastery"]))))
-        ent = float(wt["entropy"])
-        if ent > 1.0 or m_int < 30:
+    for wt in weak_topics_decayed[:6]:
+        m_int = int(round(max(0.0, min(100.0, wt["current_mastery"]))))
+        ent = float(wt["complexity_h"])
+        if m_int < 50:
             status = "warn"
-        elif m_int < 60:
+        elif m_int < 80:
             status = "mid"
         else:
             status = "ok"
@@ -1708,7 +1806,7 @@ def dashboard_home_endpoint(
         "total_cards_studied": total_interactions,
         "mastery_avg_pct": mastery_avg_pct,
         "sigma_norm_pct": sigma_norm_pct,
-        "hours_learning": hours_rounded,
+        "hours_learning": float(hours_val),
         "weak_topic_name": weak_topic_name,
         "weak_topic_mastery_pct": weak_topic_mastery_pct,
         "zones": zones_out,

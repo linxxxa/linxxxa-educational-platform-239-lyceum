@@ -1,9 +1,11 @@
+import { formatStudyTimeHours } from "@/lib/format-study-time";
 import { knowledgeLevelLabel } from "@/lib/knowledge-level";
 
 interface ReadinessCardProps {
   ri: number;
   mastery: number;
   sigma: number;
+  /** Дробные часы обучения (из API). */
   hours: number;
 }
 
@@ -87,7 +89,7 @@ export default function ReadinessCard({
             },
             {
               label: "Время занятий",
-              value: `${hours}ч`,
+              value: formatStudyTimeHours(hours),
               pct: Math.min(100, Math.max(0, hours * 3)),
             },
           ].map(({ label, value, pct }) => (

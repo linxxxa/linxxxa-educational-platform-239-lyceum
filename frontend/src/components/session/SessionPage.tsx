@@ -247,7 +247,7 @@ export default function SessionPage() {
           </div>
         </div>
 
-        {/* Контекст: RI, зоны роста, колоды — справа на lg, снизу на мобиле; на десктопе листается отдельно */}
+        {/* Контекст: уровень знаний, зоны роста, колоды — справа на lg, снизу на мобиле; на десктопе листается отдельно */}
         <aside className="min-w-0 space-y-8 border-t border-neutral-200 pt-8 lg:col-span-5 lg:border-t-0 lg:pt-0 lg:pl-2">
           <div className="lg:sticky lg:top-[calc(3.5rem+0.75rem)] lg:max-h-[calc(100vh-3.5rem-2rem)] lg:space-y-8 lg:overflow-y-auto lg:pb-4">
             <DashboardInsights />

@@ -241,23 +241,35 @@ def calculate_readiness_index_ri(
     mastery_levels: list[float],
     total_learning_hours: float,
 ) -> float:
-    """RI = 700⋅Mnorm + 200⋅σnorm + 100⋅τnorm, ограничено [0..1000]."""
+    """
+    RI = 620⋅Mnorm + 170⋅σnorm + 210⋅τnorm, [0..1000].
+    Синхронизировано с math_metrics.calculate_readiness_index (мягче σ, выше τ,
+    небольшой подъём M при малом числе тем).
+    """
     if not mastery_levels:
         return 0.0
 
     mastery_mean_value = sum(mastery_levels) / float(len(mastery_levels))
-    mastery_std_value = statistics.pstdev(mastery_levels)
+    mastery_std_value = (
+        statistics.pstdev(mastery_levels) if len(mastery_levels) > 1 else 0.0
+    )
 
     m_norm_value = max(0.0, mastery_mean_value / 100.0)
-    sigma_norm_value = max(0.0, 1.0 - mastery_std_value / 25.0)
+    topic_count = len(mastery_levels)
+    if topic_count <= 10:
+        participation_lift = min(0.14, 0.012 * float(topic_count))
+        m_norm_value = min(1.0, m_norm_value + participation_lift)
+    m_norm_value = max(m_norm_value, 0.07)
+
+    sigma_norm_value = max(0.0, 1.0 - mastery_std_value / 30.0)
 
     t_hours = max(0.0, float(total_learning_hours))
     tau_norm_value = math.log10(t_hours + 1.0) / 3.0
 
     ri_value = (
-        700.0 * m_norm_value
-        + 200.0 * sigma_norm_value
-        + 100.0 * tau_norm_value
+        620.0 * m_norm_value
+        + 170.0 * sigma_norm_value
+        + 210.0 * tau_norm_value
     )
     return max(0.0, min(1000.0, ri_value))
 

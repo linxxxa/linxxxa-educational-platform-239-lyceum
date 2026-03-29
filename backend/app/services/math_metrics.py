@@ -42,22 +42,31 @@ def calculate_readiness_index(
     total_hours: float,
 ) -> float:
     """
-    Рассчитывает Индекс Готовности RI (формула 3 ТЗ).
+    Индекс готовности RI (смягчённо для ранних этапов).
 
-    RI = w_M * M_norm + w_σ * σ_norm + w_τ * τ_norm, где сумма весов = 1000.
+    RI = w_M * M_norm + w_σ * σ_norm + w_τ * τ_norm, сумма весов = 1000.
+    Выше вес практики по времени; σ мягче (÷30); небольшой подъём M при ≤10 темах.
     """
-    w_m_value = 700.0
-    w_sigma_value = 200.0
-    w_tau_value = 100.0
+    w_m_value = 620.0
+    w_sigma_value = 170.0
+    w_tau_value = 210.0
 
     if not mastery_levels:
         return 0.0
 
     mastery_mean_value = sum(mastery_levels) / float(len(mastery_levels))
-    mastery_std_value = statistics.pstdev(mastery_levels)
+    mastery_std_value = (
+        statistics.pstdev(mastery_levels) if len(mastery_levels) > 1 else 0.0
+    )
 
     m_norm_value = max(0.0, mastery_mean_value / 100.0)
-    sigma_norm_value = max(0.0, 1.0 - mastery_std_value / 25.0)
+    topic_count = len(mastery_levels)
+    if topic_count <= 10:
+        participation_lift = min(0.14, 0.012 * float(topic_count))
+        m_norm_value = min(1.0, m_norm_value + participation_lift)
+    m_norm_value = max(m_norm_value, 0.07)
+
+    sigma_norm_value = max(0.0, 1.0 - mastery_std_value / 30.0)
     total_hours_value = max(0.0, total_hours)
     tau_norm_value = math.log10(total_hours_value + 1.0) / 3.0
 

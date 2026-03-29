@@ -102,7 +102,7 @@ function normalizeDashboardPayload(raw: unknown): DashboardHomePayload {
       0,
       Math.min(100, Math.round(num(j.sigma_norm_pct, 0)))
     ),
-    hours_learning: Math.max(0, Math.floor(num(j.hours_learning, 0))),
+    hours_learning: Math.max(0, num(j.hours_learning, 0)),
     weak_topic_name:
       typeof j.weak_topic_name === "string" ? j.weak_topic_name : "—",
     weak_topic_mastery_pct: Math.max(
@@ -155,6 +155,12 @@ export default function DashboardPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const onRefresh = () => void load();
+    window.addEventListener("edulab-dashboard-refresh", onRefresh);
+    return () => window.removeEventListener("edulab-dashboard-refresh", onRefresh);
+  }, [load]);
+
   if (!data && !error) {
     return (
       <PageContent>
@@ -171,8 +177,9 @@ export default function DashboardPage() {
     );
   }
 
-  const riView = Math.round(
-    Math.max(0, Math.min(100, data.readiness_index_view))
+  const riView = Math.max(
+    0,
+    Math.min(100, Math.round(data.readiness_index_ri / 10))
   );
   const deltaRi = Number.isFinite(data.readiness_daily_delta)
     ? data.readiness_daily_delta
@@ -237,6 +244,7 @@ export default function DashboardPage() {
         <GrowthZonesCard
           zones={data.zones.slice(0, 4)}
           firstStudyHref={firstStudyHref}
+          showAllClearMessage={data.decks.length > 0}
         />
       </div>
 

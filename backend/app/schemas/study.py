@@ -1,4 +1,6 @@
 """Pydantic-схемы для сессий обучения."""
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -81,3 +83,7 @@ class SessionFinishPayload(BaseModel):
     interactions: list[SessionInteractionItem] | None = None
     ri_before_snapshot: float | None = None
     started_at_ts: float | None = None
+    session_summary: dict[str, Any] | None = Field(
+        default=None,
+        description="Сводка с клиента (карточки сессии и т.д.); точность — из interactions или БД.",
+    )

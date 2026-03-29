@@ -5,7 +5,6 @@ import { BlockMath, InlineMath } from "react-katex";
 import {
   createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -15,6 +14,8 @@ import { useRouter } from "next/navigation";
 import confetti from "canvas-confetti";
 import { fetchTopics } from "@/lib/api/content";
 import { getToken } from "@/lib/auth";
+import { answerRedundantWithQuestion, sameCardText } from "@/lib/card-text";
+import { formatStudyTimeHours } from "@/lib/format-study-time";
 
 type Confidence = "тяжело" | "средне" | "легко";
 /** FSM: Question → Checking → Comparison → Rating → Transition → next card */
@@ -69,18 +70,30 @@ interface SessionInteractionRecord {
   topic_id: number;
 }
 
+/** Точность сессии: доля верных от общего числа ответов. */
+function formatSessionAccuracyDisplay(
+  s: SessionFinishSummary
+): { text: string; highlight: boolean } | null {
+  const total = s.accuracy_total ?? 0;
+  if (total <= 0) return null;
+  const correct = s.accuracy_correct ?? 0;
+  const pctRaw =
+    s.accuracy_percent != null && Number.isFinite(Number(s.accuracy_percent))
+      ? Number(s.accuracy_percent)
+      : (100 * correct) / total;
+  const pct = Math.round(Math.max(0, Math.min(100, pctRaw)));
+  return {
+    text: `${pct}% (${correct}/${total})`,
+    highlight: pct > 50,
+  };
+}
+
 interface EnergyContextState {
   energy: number;
   setEnergy: (next: number) => void;
 }
 
 const StudyEnergyContext = createContext<EnergyContextState | null>(null);
-
-function useStudyEnergy() {
-  const ctx = useContext(StudyEnergyContext);
-  if (!ctx) throw new Error("useStudyEnergy must be used inside provider");
-  return ctx;
-}
 
 function authHeaders(): HeadersInit {
   const t = getToken();
@@ -92,6 +105,14 @@ function authHeaders(): HeadersInit {
 
 function normalizeAnswer(input: string): string {
   return input.replace(/\$\$/g, "").replace(/\$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Ответ уже показан в блоке вопроса — не дублировать в сравнении. */
+function answerAlreadyInQuestionBody(card: StudyCard): boolean {
+  return (
+    sameCardText(card.question_text, card.answer_text) ||
+    answerRedundantWithQuestion(card.question_text, card.answer_text)
+  );
 }
 
 function renderLatexBlock(content: string) {
@@ -126,90 +147,64 @@ function renderAnswerMaybeLatex(text: string, className: string) {
   return <p className={className}>{text}</p>;
 }
 
-function EnergyBadge() {
-  const { energy } = useStudyEnergy();
-  const rounded = Math.max(0, Math.round(energy));
-  const pulseClass = rounded < 20 ? "animate-pulse" : "";
+/** Компактный выход из сессии (без полосы прогресса и энергии). */
+function StudyExitButton({ onExit }: { onExit: () => void }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className={`text-sm ${pulseClass}`}>⚡</span>
-      <span className="text-xs text-neutral-500">{rounded}</span>
-    </div>
+    <button
+      type="button"
+      onClick={onExit}
+      aria-label="Прервать сессию"
+      className="fixed right-4 top-[calc(var(--app-header-h)+0.5rem)] z-50 inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#E4E4E7] text-xs text-neutral-600 hover:bg-neutral-100 dark:border-[#27272A] dark:text-neutral-300 dark:hover:bg-neutral-800"
+    >
+      ✕
+    </button>
   );
 }
 
-function StudyHeader({
-  topicLabel,
-  done,
-  total,
-  onExit,
-}: {
-  topicLabel: string;
-  done: number;
-  total: number;
-  onExit: () => void;
-}) {
-  const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-  return (
-    <header className="fixed inset-x-0 top-[var(--app-header-h)] z-50 h-16 border-b border-[#E4E4E7] bg-white/80 backdrop-blur dark:border-[#27272A] dark:bg-[#18181B]/80">
-      <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-6">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onExit}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#E4E4E7] text-sm text-neutral-600 hover:bg-neutral-100 dark:border-[#27272A] dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            ✕
-          </button>
-          <div className="text-sm text-neutral-700 dark:text-neutral-300">{topicLabel}</div>
-        </div>
-
-        <div className="w-full max-w-[320px] px-6">
-          <div className="h-[2px] w-full bg-neutral-200 dark:bg-neutral-700">
-            <div className="h-[2px] bg-neutral-900 dark:bg-white" style={{ width: `${percent}%` }} />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="text-xs text-neutral-500">
-            {done}/{total || "—"}
-          </div>
-          <EnergyBadge />
-        </div>
-      </div>
-    </header>
-  );
-}
-
-function SummaryCounter({ from, to }: { from: number; to: number }) {
-  const [value, setValue] = useState(Math.round(from));
+function SummaryCounter({ fromRi, toRi }: { fromRi: number; toRi: number }) {
+  const fromNorm = Math.max(0, Math.min(100, Math.round(fromRi / 10)));
+  const [value, setValue] = useState(fromNorm);
   useEffect(() => {
+    const fromN = Math.max(0, Math.min(100, Math.round(fromRi / 10)));
+    const toN = Math.max(0, Math.min(100, Math.round(toRi / 10)));
+    setValue(fromN);
     const start = Date.now();
     const timer = window.setInterval(() => {
       const p = Math.min(1, (Date.now() - start) / 700);
-      setValue(Math.round(from + (to - from) * p));
+      setValue(Math.round(fromN + (toN - fromN) * p));
       if (p >= 1) window.clearInterval(timer);
     }, 30);
     return () => window.clearInterval(timer);
-  }, [from, to]);
-  return <div className="font-[var(--font-geist-mono)] text-5xl font-medium">{value}</div>;
-}
-
-function MetricCard({ label, value }: { label: string; value: string }) {
+  }, [fromRi, toRi]);
   return (
-    <div className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-6 dark:border-[#27272A] dark:bg-[#18181B]">
-      <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 text-2xl text-neutral-900 dark:text-neutral-100">{value}</div>
+    <div className="flex flex-col items-center gap-0.5">
+      <div className="font-[var(--font-geist-mono)] text-5xl font-medium tabular-nums">
+        {value}
+      </div>
+      <div className="text-sm text-neutral-500">из 100</div>
     </div>
   );
 }
 
-/** Длительность сессии по часам (стена). */
-function formatMinutes(v: number): string {
-  const totalSec = Math.max(0, Math.round(v * 60));
-  const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
-  const ss = String(totalSec % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
+function MetricCard({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="text-xs text-neutral-500">{label}</div>
+      <div
+        className={`mt-1 text-2xl text-neutral-900 dark:text-neutral-100 ${valueClassName ?? ""}`}
+      >
+        {value}
+      </div>
+    </div>
+  );
 }
 
 /** Суммарное время раздумий (мс) → MM:SS. */
@@ -246,10 +241,15 @@ export default function StudyTopicPage({
   const sessionInteractionsRef = useRef<SessionInteractionRecord[]>([]);
   const sessionRiBeforeRef = useRef<number | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
+  const sessionRef = useRef(session);
 
   // τ: старт после отрисовки вопроса (двойной rAF); стоп на «Проверить» — дальше время не считается.
   const startTimeRef = useRef<number | null>(null);
   const responseTimeMsRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   useEffect(() => {
     params.then((p) => setTopicId(p.topic_id));
@@ -316,10 +316,10 @@ export default function StudyTopicPage({
 
   const startSession = useCallback(async () => {
     if (!topicId) return;
+    sessionStartedAtRef.current = Date.now() / 1000;
     setSeenCardIds([]);
     sessionInteractionsRef.current = [];
     sessionRiBeforeRef.current = null;
-    sessionStartedAtRef.current = null;
     if (!getToken()) {
       router.replace("/login");
       return;
@@ -351,35 +351,38 @@ export default function StudyTopicPage({
       return;
     }
     const interactions = sessionInteractionsRef.current;
-    const body: Record<string, unknown> = {};
+    const body: Record<string, unknown> = {
+      started_at_ts:
+        sessionStartedAtRef.current ?? Date.now() / 1000,
+      session_summary: {
+        cards_done: sessionRef.current.cards_done,
+        cards_total: sessionRef.current.cards_total,
+      },
+    };
     if (sessionRiBeforeRef.current != null) {
       body.ri_before_snapshot = sessionRiBeforeRef.current;
     }
-    if (sessionStartedAtRef.current != null) {
-      body.started_at_ts = sessionStartedAtRef.current;
-    }
     if (interactions.length > 0) {
       body.interactions = interactions.map((x) => ({
-        is_correct: x.is_correct,
+        is_correct: Boolean(x.is_correct),
         response_time_ms: Math.round(x.response_time_ms),
         topic_id: x.topic_id,
       }));
     }
-    const payload =
-      Object.keys(body).length > 0 ? JSON.stringify(body) : undefined;
 
     const res = await fetch("/api/session/finish", {
       method: "POST",
       headers: {
         ...authHeaders(),
-        ...(payload ? { "Content-Type": "application/json" } : {}),
+        "Content-Type": "application/json",
       },
-      ...(payload ? { body: payload } : {}),
+      body: JSON.stringify(body),
     });
     if (res.ok) {
       const data = (await res.json()) as SessionFinishSummary;
       setSummary(data);
       setEnergy(Math.max(0, Math.round(data.energy_left ?? energy)));
+      window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
     }
     setSummaryLoaded(true);
     confetti({
@@ -399,8 +402,11 @@ export default function StudyTopicPage({
     if (stage === "FINISHED") void finishSession();
   }, [stage, finishSession]);
 
-  const topicLabel = card?.topic_title ?? `Тема ${topicId || ""}`;
   const energyContext = useMemo(() => ({ energy, setEnergy }), [energy]);
+  const accuracyDisplay = useMemo(
+    () => (summary ? formatSessionAccuracyDisplay(summary) : null),
+    [summary]
+  );
 
   const handleCheck = useCallback(() => {
     if (!card || stage !== "QUESTION") return;
@@ -522,18 +528,10 @@ export default function StudyTopicPage({
     return () => window.removeEventListener("keydown", handler);
   }, [card, stage, handleCheck, handleConfidence]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#FFFFFF] px-6 pt-[calc(var(--app-header-h)+4rem)] dark:bg-[#09090B]">
-        <div className="mx-auto h-64 w-full max-w-2xl animate-pulse rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] dark:border-[#27272A] dark:bg-[#18181B]" />
-      </div>
-    );
-  }
-
   return (
     <StudyEnergyContext.Provider value={energyContext}>
-      <div className="min-h-screen bg-[#FFFFFF] dark:bg-[#09090B]">
-        {fastTrackPinned && (
+      <div className="min-h-screen bg-neutral-100 dark:bg-neutral-950">
+        {!loading && fastTrackPinned && (
           <div
             role="status"
             className="fixed bottom-6 left-1/2 z-[60] flex max-w-[min(92vw,22rem)] -translate-x-1/2 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-medium text-emerald-950 shadow-lg dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100"
@@ -544,17 +542,15 @@ export default function StudyTopicPage({
             <span>Закреплено! Вернемся через неделю</span>
           </div>
         )}
-        <StudyHeader
-          topicLabel={topicLabel}
-          done={session.cards_done}
-          total={session.cards_total}
-          onExit={() => router.push("/dashboard")}
-        />
+        {!loading && <StudyExitButton onExit={() => router.push("/dashboard")} />}
 
         <main className="flex min-h-screen flex-col">
-          {/* Header guard: глобальный хедер + фиксированная панель сессии (h-16) */}
-          <div className="pt-[calc(var(--app-header-h)+4rem)]">
-            <div className="min-h-[calc(100vh-var(--app-header-h)-4rem)] px-6 py-8">
+          <div className="pt-[calc(var(--app-header-h)+2.75rem)]">
+            <div className="min-h-[calc(100vh-var(--app-header-h)-2.75rem)] px-6 py-8">
+            {loading ? (
+              <div className="mx-auto h-64 w-full max-w-2xl animate-pulse rounded-xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900" />
+            ) : (
+              <>
             {showBreakHint && stage !== "FINISHED" && (
               <div className="mx-auto mb-4 w-full max-w-4xl rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-700">
                 Энергия ниже оптимума, лучше сделать перерыв.
@@ -563,18 +559,22 @@ export default function StudyTopicPage({
 
             {stage === "FINISHED" && (
               <section className="mx-auto grid w-full max-w-4xl gap-6">
-                <div className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-8 dark:border-[#27272A] dark:bg-[#18181B]">
+                <div className="rounded-xl border border-neutral-200 bg-white p-8 dark:border-neutral-800 dark:bg-neutral-900">
                   <h2 className="text-3xl">Сессия завершена. Отличная работа!</h2>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <MetricCard label="Эффективность (η)" value={`${(summary?.eta_percent ?? 0).toFixed(1)}%`} />
-                  <MetricCard label="Прирост RI (ΔRI)" value={`${(summary?.delta_ri ?? 0) >= 0 ? "+" : ""}${(summary?.delta_ri ?? 0).toFixed(1)}`} />
+                  <MetricCard
+                    label="Изменение уровня знаний"
+                    value={`${(summary?.delta_ri ?? 0) >= 0 ? "+" : ""}${Math.round((summary?.delta_ri ?? 0) / 10)}`}
+                  />
                   <MetricCard
                     label="Точность"
-                    value={
-                      summary?.accuracy_total
-                        ? `${summary.accuracy_percent?.toFixed(0) ?? Math.round((100 * (summary.accuracy_correct ?? 0)) / (summary.accuracy_total || 1))}% (${summary.accuracy_correct}/${summary.accuracy_total})`
-                        : "—"
+                    value={accuracyDisplay?.text ?? "—"}
+                    valueClassName={
+                      accuracyDisplay?.highlight
+                        ? "text-emerald-700 dark:text-emerald-400"
+                        : undefined
                     }
                   />
                   <MetricCard
@@ -583,11 +583,12 @@ export default function StudyTopicPage({
                   />
                 </div>
                 <p className="text-center text-xs text-neutral-500">
-                  Длительность сессии (стена): {formatMinutes(summary?.session_minutes ?? 0)}
+                  Длительность сессии (стена):{" "}
+                  {formatStudyTimeHours((summary?.session_minutes ?? 0) / 60)}
                 </p>
-                <div className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-8 dark:border-[#27272A] dark:bg-[#18181B]">
-                  <div className="text-xs uppercase text-neutral-500">Current RI</div>
-                  <SummaryCounter from={summary?.ri_before ?? 0} to={summary?.ri_after ?? 0} />
+                <div className="rounded-xl border border-neutral-200 bg-white p-8 dark:border-neutral-800 dark:bg-neutral-900">
+                  <div className="text-xs uppercase text-neutral-500">Уровень знаний</div>
+                  <SummaryCounter fromRi={summary?.ri_before ?? 0} toRi={summary?.ri_after ?? 0} />
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <button
@@ -650,7 +651,7 @@ export default function StudyTopicPage({
             )}
 
             {card && stage !== "FINISHED" && stage !== "EMPTY" && (
-              <div className="flex min-h-[calc(100vh-var(--app-header-h)-4rem)] flex-col items-center justify-center">
+              <div className="flex min-h-[calc(100vh-var(--app-header-h)-2.75rem)] flex-col items-center justify-center">
                 <AnimatePresence mode="wait">
                   <motion.section
                     key={`${card.card_id}-${shakeNonce}`}
@@ -665,7 +666,7 @@ export default function StudyTopicPage({
                     }}
                     exit={{ opacity: 0, y: -60 }}
                     transition={{ duration: 0.2 }}
-                    className="w-full max-w-2xl rounded-[12px] border border-[#E4E4E7] bg-[#FAFAFA] p-8 shadow-sm dark:border-[#27272A] dark:bg-[#18181B]"
+                    className="w-full max-w-2xl rounded-[12px] border border-neutral-200 bg-white p-8 shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
                   >
                     <div className="mb-4 text-xs capitalize text-neutral-500">{card.card_type}</div>
                     <div className="mb-6 max-h-[320px] min-w-0 overflow-y-auto overflow-x-auto">
@@ -700,25 +701,40 @@ export default function StudyTopicPage({
                         <div className={`rounded-md border px-3 py-2 text-sm ${isCorrect ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}>
                           {isCorrect ? "Верно" : "Неверно"}
                         </div>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 dark:border-[#27272A] dark:bg-[#09090B]">
-                            <div className="mb-1 text-xs text-neutral-500">Твой ответ</div>
-                            {isCorrect ? (
-                              renderAnswerMaybeLatex(submittedAnswer, "text-sm text-emerald-700")
-                            ) : (
-                              renderAnswerMaybeLatex(
+                        {isCorrect ? (
+                          !answerAlreadyInQuestionBody(card) ? (
+                            <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+                              <div className="mb-1 text-xs text-neutral-600 dark:text-neutral-400">Правильный ответ</div>
+                              <div className="min-w-0 overflow-x-auto font-semibold text-emerald-900 dark:text-emerald-100">
+                                {renderLatexBlock(card.answer_text)}
+                              </div>
+                            </div>
+                          ) : null
+                        ) : (
+                          <div
+                            className={
+                              answerAlreadyInQuestionBody(card)
+                                ? "space-y-3"
+                                : "grid gap-3 md:grid-cols-2"
+                            }
+                          >
+                            <div className="rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 dark:border-[#27272A] dark:bg-[#09090B]">
+                              <div className="mb-1 text-xs text-neutral-500">Твой ответ</div>
+                              {renderAnswerMaybeLatex(
                                 submittedAnswer,
                                 "text-sm text-neutral-500 line-through"
-                              )
+                              )}
+                            </div>
+                            {!answerAlreadyInQuestionBody(card) && (
+                              <div className="rounded-lg border border-[#E4E4E7] bg-[#F7F7F7] px-3 py-2 font-semibold text-neutral-900 shadow-[0_0_15px_rgba(34,197,94,0.1)] dark:border-[#27272A] dark:bg-[#121214] dark:text-neutral-100">
+                                <div className="mb-1 text-xs font-normal text-neutral-500">Ожидаемый ответ</div>
+                                <div className="min-w-0 overflow-x-auto font-semibold">
+                                  {renderLatexBlock(card.answer_text)}
+                                </div>
+                              </div>
                             )}
                           </div>
-                          <div className="rounded-lg border border-[#E4E4E7] bg-[#F7F7F7] px-3 py-2 font-semibold text-neutral-900 shadow-[0_0_15px_rgba(34,197,94,0.1)] dark:border-[#27272A] dark:bg-[#121214] dark:text-neutral-100">
-                            <div className="mb-1 text-xs font-normal text-neutral-500">Ожидаемый ответ</div>
-                            <div className="min-w-0 overflow-x-auto font-semibold">
-                              {renderLatexBlock(card.answer_text)}
-                            </div>
-                          </div>
-                        </div>
+                        )}
                         <div>
                           <button type="button" onClick={() => setShowExplanation((v) => !v)} className="text-sm text-neutral-600 underline underline-offset-2 dark:text-neutral-300">
                             {showExplanation ? "Скрыть объяснение" : "Показать объяснение"}
@@ -754,6 +770,8 @@ export default function StudyTopicPage({
                   </motion.section>
                 </AnimatePresence>
               </div>
+            )}
+              </>
             )}
             </div>
           </div>

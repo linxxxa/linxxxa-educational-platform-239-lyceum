@@ -16,7 +16,6 @@ function Header({ className, variant = "default" }: HeaderProps) {
   const router = useRouter();
   const authed = useAuthState();
   const [mounted, setMounted] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const burgerRef = useRef<HTMLButtonElement>(null);
@@ -37,12 +36,6 @@ function Header({ className, variant = "default" }: HeaderProps) {
   }, []);
 
   useEffect(() => {
-    const handler = () => setScrolled(window.scrollY > 10);
-    window.addEventListener("scroll", handler);
-    return () => window.removeEventListener("scroll", handler);
-  }, []);
-
-  useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       const isInsideMenu = menuRef.current?.contains(target);
@@ -55,25 +48,25 @@ function Header({ className, variant = "default" }: HeaderProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
 
+  /** Фон шапки всегда белый (в т.ч. в dark). */
   const headerBarClasses =
     variant === "dashboard"
-      ? "border-b border-neutral-200/90 bg-white/95 shadow-sm backdrop-blur-md dark:border-neutral-800 dark:bg-neutral-950/95"
-      : scrolled
-        ? "border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950"
-        : "bg-transparent";
+      ? "border-b border-neutral-200/90 bg-white shadow-sm backdrop-blur-md dark:border-neutral-200 dark:bg-white"
+      : "border-b border-neutral-200/80 bg-white dark:border-neutral-200 dark:bg-white";
 
   const headerInnerPad =
     variant === "dashboard" ? "px-4 sm:px-6 lg:px-8" : "px-5";
 
+  const headerClassName = [
+    "fixed left-0 right-0 top-0 z-[100] transition-all duration-200",
+    headerBarClasses,
+    className,
+  ]
+    .filter((s): s is string => Boolean(s && String(s).trim()))
+    .join(" ");
+
   return (
-    <header
-      className={`
-        fixed left-0 right-0 top-0 z-[100]
-        transition-all duration-200
-        ${headerBarClasses}
-        ${className ?? ""}
-      `}
-    >
+    <header className={headerClassName}>
       <div
         className={`mx-auto flex h-14 max-w-5xl items-center justify-between ${headerInnerPad}`}
       >
@@ -190,7 +183,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
       {menuOpen && (
         <div
           ref={menuRef}
-          className={`flex flex-col gap-3 border-b border-neutral-200 bg-white pb-4 dark:border-neutral-800 dark:bg-neutral-950 md:hidden animate-menu-fade-in ${headerInnerPad}`}
+          className={`flex flex-col gap-3 border-b border-neutral-200 bg-white pb-4 dark:border-neutral-200 dark:bg-white md:hidden animate-menu-fade-in ${headerInnerPad}`}
         >
           <Link
             href="#about"

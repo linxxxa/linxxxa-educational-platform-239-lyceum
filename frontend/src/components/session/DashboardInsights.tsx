@@ -10,11 +10,15 @@ interface WeakTopic {
   topic_display_name: string;
   entropy: number;
   avg_mastery: number;
+  /** Освоение с учётом затухания (сервер), 0–100 */
+  current_mastery?: number;
+  /** H(T) для отображения */
+  topic_complexity?: number;
 }
 
 interface InsightsPayload {
   readiness_index_ri: number;
-  /** RI / 10, шкала 0–100 для отображения */
+  /** Нормализованный балл 0–100 (сырой индекс / 10), если задан отдельно от readiness_index_ri */
   readiness_index_view?: number;
   readiness_daily_delta: number;
   weak_topics: WeakTopic[];
@@ -149,10 +153,37 @@ export default function DashboardInsights() {
           </h2>
           <span className="text-xs text-neutral-500">Твои пробелы</span>
         </div>
+        {data.weak_topics.length === 0 ? (
+          <p className="px-2 py-4 text-sm leading-relaxed text-neutral-500">
+            Все темы в порядке! Отдохни или повтори избранное.
+          </p>
+        ) : (
         <div className="divide-y divide-[#E4E4E7] dark:divide-[#27272A]">
           {data.weak_topics.slice(0, 4).map((topic) => {
-            const masteryPct = Math.min(100, Math.max(0, topic.avg_mastery));
-            const needsAttention = topic.entropy > 1.0;
+            const masteryPct = Math.min(
+              100,
+              Math.max(
+                0,
+                topic.current_mastery ?? topic.avg_mastery
+              )
+            );
+            const warnBand = masteryPct < 50;
+            const barColor = warnBand ? "bg-red-600" : "bg-orange-500";
+            const badge =
+              warnBand ? (
+                <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600 dark:bg-red-950/50 dark:text-red-400">
+                  Нужно внимание
+                </span>
+              ) : (
+                <span className="shrink-0 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-600 dark:bg-orange-950/50 dark:text-orange-400">
+                  В процессе
+                </span>
+              );
+            const hLabel =
+              topic.topic_complexity != null &&
+              Number.isFinite(topic.topic_complexity)
+                ? topic.topic_complexity.toFixed(2)
+                : topic.entropy.toFixed(2);
             return (
               <Link
                 key={topic.topic_unique_identifier}
@@ -165,30 +196,27 @@ export default function DashboardInsights() {
                       <span className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
                         {topic.topic_display_name}
                       </span>
-                      {needsAttention && (
-                        <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600 dark:bg-red-950/50 dark:text-red-400">
-                          Нужно внимание
-                        </span>
-                      )}
+                      {badge}
                     </div>
                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
                       <div
-                        className="h-full rounded-full bg-neutral-400 transition-[width] dark:bg-neutral-500"
+                        className={`h-full rounded-full transition-[width] ${barColor}`}
                         style={{ width: `${masteryPct}%` }}
                       />
                     </div>
                     <div className="mt-1 font-[var(--font-geist-mono)] text-[11px] tabular-nums text-neutral-500">
-                      Освоено: {masteryPct.toFixed(0)}%
+                      Текущее освоение: {masteryPct.toFixed(0)}%
                     </div>
                   </div>
                   <span className="shrink-0 rounded-md border border-[#E4E4E7] bg-white px-2 py-1 font-[var(--font-geist-mono)] text-xs tabular-nums text-neutral-600 dark:border-[#27272A] dark:bg-[#09090B] dark:text-neutral-300">
-                    Индекс сложности: {topic.entropy.toFixed(2)}
+                    H(T): {hLabel}
                   </span>
                 </div>
               </Link>
             );
           })}
         </div>
+        )}
         {data.weak_topics[0] && (
           <Link
             href={`/study/${data.weak_topics[0].topic_unique_identifier}`}
