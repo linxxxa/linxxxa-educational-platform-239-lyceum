@@ -1,8 +1,9 @@
 """Управление контентом: предметы, колоды, пакет карточек (239 Protocol)."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_authorized_user_object
+from app.core.rate_limit import limiter
 from app.database import get_database_session_generator
 from app.models.user_account import UserAccountModel
 from app.schemas.content import (
@@ -15,11 +16,13 @@ from app.schemas.content import (
 )
 from app.services.content_deck_service import (
     add_cards_to_topic_transaction,
-    clone_topic_deck_share_to_recipient_by_email,
+    accept_deck_share_token_for_user,
+    create_deck_share_invite_and_send_email,
     create_learning_subject_and_persist,
     fetch_subjects_owned_by_user,
     fetch_topics_for_user_optional_subject,
     delete_topic_for_owner,
+    get_deck_share_token_preview,
     persist_deck_batch_transaction,
     update_topic_metadata_for_owner,
 )
@@ -180,21 +183,47 @@ def add_cards_to_topic_endpoint(
 
 
 @learning_content_router.post("/topics/{topic_id}/share", status_code=201)
+@limiter.limit("5/hour")
 def share_topic_deck_clone_by_email_endpoint(
+    request: Request,
     topic_id: int,
     body: DeckShareByEmailRequest,
     database_connection_session: Session = Depends(get_database_session_generator),
     authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
 ):
-    """Клонирует колоду (тему + карточки) для пользователя с указанным email."""
-    new_topic = clone_topic_deck_share_to_recipient_by_email(
+    """Создаёт приглашение и отправляет письмо со ссылками (без мгновенного клонирования)."""
+    _ = request  # slowapi / rate limit
+    return create_deck_share_invite_and_send_email(
         database_connection_session,
         sharer_user_account_identifier=authorized_user.user_unique_identifier,
         source_topic_unique_identifier=int(topic_id),
-        recipient_email_normalized=body.email,
+        recipient_email_raw=body.email,
+    )
+
+
+@learning_content_router.get("/share/{token}/preview")
+def deck_share_preview_endpoint(
+    token: str,
+    database_connection_session: Session = Depends(get_database_session_generator),
+):
+    """Публичное превью приглашения (для экрана /decks/share)."""
+    return get_deck_share_token_preview(database_connection_session, token)
+
+
+@learning_content_router.post("/share/{token}/accept", status_code=201)
+def deck_share_accept_endpoint(
+    token: str,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
+):
+    """Принять приглашение: клонировать колоду в аккаунт текущего пользователя."""
+    new_topic = accept_deck_share_token_for_user(
+        database_connection_session,
+        share_token=token,
+        recipient_user_account_identifier=authorized_user.user_unique_identifier,
     )
     return {
-        "message": "Колода отправлена",
-        "topic_unique_identifier": new_topic.topic_unique_identifier,
+        "message": "Колода добавлена",
+        "cloned_topic_unique_identifier": int(new_topic.topic_unique_identifier),
         "cards_copied_count": int(new_topic.related_topics_count or 0),
     }

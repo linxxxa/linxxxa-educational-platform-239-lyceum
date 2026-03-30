@@ -1,15 +1,24 @@
 """
 Транзакционное сохранение колоды: тема + карточки (239 Protocol).
 """
+import logging
+import os
+import secrets
+from datetime import datetime, timedelta
+
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.deck_share_token import DeckShareTokenModel
 from app.models.learning_card import LearningCardModel, LearningCardTypeEnum
 from app.models.learning_subject import LearningSubjectModel
 from app.models.learning_topic import LearningTopicModel
 from app.models.user_account import UserAccountModel
 from app.schemas.content import CardPayloadItem
+from app.services.user_analytics_service import recalculate_topic_knowledge_level_for_owner
+
+logger = logging.getLogger(__name__)
 
 
 _CARD_TYPE_FROM_PROTOCOL = {
@@ -271,6 +280,11 @@ def add_cards_to_topic_transaction(
     # равным количеству карточек в теме для консистентности.
     topic.related_topics_count = int(len(card_ids))
     database_session_instance.add(topic)
+    recalculate_topic_knowledge_level_for_owner(
+        database_session_instance,
+        authorized_user_account_identifier,
+        int(topic_unique_identifier),
+    )
     database_session_instance.commit()
     return card_ids
 
@@ -280,16 +294,20 @@ USER_NOT_FOUND_SHARE_MESSAGE = (
 )
 
 
-def clone_topic_deck_share_to_recipient_by_email(
+def _normalize_email_for_share(email: str) -> str:
+    return email.strip().lower()
+
+
+def clone_topic_deck_to_recipient_user(
     database_session_instance: Session,
     *,
     sharer_user_account_identifier: int,
     source_topic_unique_identifier: int,
-    recipient_email_normalized: str,
+    recipient_user_account_identifier: int,
 ) -> LearningTopicModel:
     """
-    Полная копия темы и карточек для другого пользователя.
-    Интервалы SM-2, прогресс и статистика не копируются (новые карточки с дефолтами).
+    Полная копия темы и карточек для указанного пользователя-получателя.
+    SM-2 и прогресс не копируются.
     """
     topic = database_session_instance.get(
         LearningTopicModel, int(source_topic_unique_identifier)
@@ -298,21 +316,7 @@ def clone_topic_deck_share_to_recipient_by_email(
         raise HTTPException(status_code=404, detail="Колода не найдена")
     if int(topic.topic_owner_user_id or 0) != int(sharer_user_account_identifier):
         raise HTTPException(status_code=403, detail="Нет доступа к этой колоде")
-
-    recipient_row = database_session_instance.execute(
-        select(UserAccountModel).where(
-            func.lower(UserAccountModel.user_email_address)
-            == recipient_email_normalized
-        )
-    ).scalars().first()
-    if recipient_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail=USER_NOT_FOUND_SHARE_MESSAGE,
-        )
-    if int(recipient_row.user_unique_identifier) == int(
-        sharer_user_account_identifier
-    ):
+    if int(recipient_user_account_identifier) == int(sharer_user_account_identifier):
         raise HTTPException(
             status_code=400,
             detail="Нельзя отправить колоду самому себе",
@@ -339,7 +343,7 @@ def clone_topic_deck_share_to_recipient_by_email(
         related_topics_count=len(source_cards),
         parent_topic_reference_identifier=None,
         parent_subject_reference_id=None,
-        topic_owner_user_id=int(recipient_row.user_unique_identifier),
+        topic_owner_user_id=int(recipient_user_account_identifier),
     )
     database_session_instance.add(new_topic)
     database_session_instance.flush()
@@ -347,7 +351,7 @@ def clone_topic_deck_share_to_recipient_by_email(
     for card in source_cards:
         database_session_instance.add(
             LearningCardModel(
-                owner_user_account_id=int(recipient_row.user_unique_identifier),
+                owner_user_account_id=int(recipient_user_account_identifier),
                 parent_topic_reference_id=int(new_topic.topic_unique_identifier),
                 card_question_text_payload=card.card_question_text_payload,
                 card_answer_text_payload=card.card_answer_text_payload,
@@ -355,6 +359,251 @@ def clone_topic_deck_share_to_recipient_by_email(
             )
         )
 
+    recalculate_topic_knowledge_level_for_owner(
+        database_session_instance,
+        int(recipient_user_account_identifier),
+        int(new_topic.topic_unique_identifier),
+    )
     database_session_instance.commit()
     database_session_instance.refresh(new_topic)
     return new_topic
+
+
+def clone_topic_deck_share_to_recipient_by_email(
+    database_session_instance: Session,
+    *,
+    sharer_user_account_identifier: int,
+    source_topic_unique_identifier: int,
+    recipient_email_normalized: str,
+) -> LearningTopicModel:
+    """Устаревший прямой клон по email — для обратной совместимости тестов."""
+    recipient_row = database_session_instance.execute(
+        select(UserAccountModel).where(
+            func.lower(UserAccountModel.user_email_address)
+            == recipient_email_normalized
+        )
+    ).scalars().first()
+    if recipient_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=USER_NOT_FOUND_SHARE_MESSAGE,
+        )
+    return clone_topic_deck_to_recipient_user(
+        database_session_instance,
+        sharer_user_account_identifier=sharer_user_account_identifier,
+        source_topic_unique_identifier=source_topic_unique_identifier,
+        recipient_user_account_identifier=int(recipient_row.user_unique_identifier),
+    )
+
+
+def _frontend_base_url() -> str:
+    return os.getenv("FRONTEND_URL", "http://localhost:3001").rstrip("/")
+
+
+def _build_deck_share_email_html(
+    *,
+    topic_title: str,
+    sharer_label: str,
+    recipient_email: str,
+    universal_link: str,
+    registered_deep_link: str,
+    new_user_register_link: str,
+    recipient_already_registered: bool,
+) -> str:
+    cta = "Забрать колоду и начать учиться"
+    hint = (
+        "Вы уже зарегистрированы — после входа колода будет добавлена автоматически."
+        if recipient_already_registered
+        else "Создайте аккаунт по ссылке — колода будет привязана к профилю."
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8" /></head>
+<body style="font-family:system-ui,sans-serif;background:#f5f5f5;padding:24px;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <p style="margin:0 0 8px;font-size:14px;color:#525252;">EduLab</p>
+          <h1 style="margin:0 0 12px;font-size:20px;color:#171717;">Вам передали колоду</h1>
+          <p style="margin:0 0 8px;font-size:15px;color:#404040;"><strong>{topic_title}</strong></p>
+          <p style="margin:0 0 20px;font-size:13px;color:#737373;">От: {sharer_label} · для {recipient_email}</p>
+          <p style="margin:0 0 24px;font-size:13px;color:#525252;">{hint}</p>
+          <div style="text-align:center;margin:0 0 24px;">
+            <a href="{universal_link}" style="display:inline-block;padding:14px 28px;background:#2F3437;color:#fff;
+              text-decoration:none;border-radius:8px;font-size:15px;font-weight:600;">{cta}</a>
+          </div>
+          <p style="margin:0 0 8px;font-size:12px;color:#a3a3a3;">Или откройте:</p>
+          <p style="margin:0;font-size:11px;word-break:break-all;color:#737373;">
+            Зарегистрированным: <a href="{registered_deep_link}">{registered_deep_link}</a><br/>
+            Новым пользователям: <a href="{new_user_register_link}">{new_user_register_link}</a>
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
+def create_deck_share_invite_and_send_email(
+    database_session_instance: Session,
+    *,
+    sharer_user_account_identifier: int,
+    source_topic_unique_identifier: int,
+    recipient_email_raw: str,
+) -> dict:
+    """
+    Создаёт токен приглашения (без мгновенного клонирования).
+    В письме — умные ссылки (дашборд / регистрация / универсальная).
+    """
+    recipient_email_normalized = _normalize_email_for_share(recipient_email_raw)
+    topic = database_session_instance.get(
+        LearningTopicModel, int(source_topic_unique_identifier)
+    )
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Колода не найдена")
+    if int(topic.topic_owner_user_id or 0) != int(sharer_user_account_identifier):
+        raise HTTPException(status_code=403, detail="Нет доступа к этой колоде")
+
+    sharer = database_session_instance.get(
+        UserAccountModel, int(sharer_user_account_identifier)
+    )
+    if sharer is None:
+        raise HTTPException(status_code=403, detail="Нет доступа")
+
+    recipient_row = database_session_instance.execute(
+        select(UserAccountModel).where(
+            func.lower(UserAccountModel.user_email_address)
+            == recipient_email_normalized
+        )
+    ).scalars().first()
+    if recipient_row is not None and int(
+        recipient_row.user_unique_identifier
+    ) == int(sharer_user_account_identifier):
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя отправить колоду самому себе",
+        )
+
+    token_str = secrets.token_urlsafe(32)
+    now = datetime.utcnow()
+    expires = now + timedelta(days=7)
+    row = DeckShareTokenModel(
+        share_token=token_str,
+        source_topic_unique_identifier=int(source_topic_unique_identifier),
+        sharer_user_account_id=int(sharer_user_account_identifier),
+        recipient_email_normalized=recipient_email_normalized,
+        created_at=now,
+        expires_at=expires,
+    )
+    database_session_instance.add(row)
+    database_session_instance.commit()
+
+    base = _frontend_base_url()
+    universal = f"{base}/decks/share/{token_str}"
+    registered_deep = f"{base}/dashboard?shareToken={token_str}"
+    new_user_link = (
+        f"{base}/register?inviteCode={token_str}"
+        f"&targetDeck={int(source_topic_unique_identifier)}"
+    )
+    recipient_registered = recipient_row is not None
+
+    sharer_label = getattr(sharer, "user_full_display_name", None) or getattr(
+        sharer, "user_email_address", "Пользователь"
+    )
+    html = _build_deck_share_email_html(
+        topic_title=topic.topic_display_name or "Колода",
+        sharer_label=str(sharer_label),
+        recipient_email=recipient_email_normalized,
+        universal_link=universal,
+        registered_deep_link=registered_deep,
+        new_user_register_link=new_user_link,
+        recipient_already_registered=recipient_registered,
+    )
+    logger.info(
+        "[deck-share] invite created token=%s to=%s registered=%s",
+        token_str[:12],
+        recipient_email_normalized,
+        recipient_registered,
+    )
+    logger.debug("[deck-share] email html (preview): %s", html[:500])
+
+    return {
+        "message": "Ссылка для получения колоды сформирована",
+        "share_token": token_str,
+        "share_url": universal,
+        "links": {
+            "universal": universal,
+            "registered_user_dashboard": registered_deep,
+            "new_user_register": new_user_link,
+        },
+        "recipient_registered": recipient_registered,
+        "expires_at": expires.isoformat() + "Z",
+    }
+
+
+def accept_deck_share_token_for_user(
+    database_session_instance: Session,
+    *,
+    share_token: str,
+    recipient_user_account_identifier: int,
+) -> LearningTopicModel:
+    """Поглощает токен: клонирует колоду получателю (email должен совпадать)."""
+    row = database_session_instance.get(DeckShareTokenModel, share_token)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    if row.consumed_at is not None:
+        raise HTTPException(status_code=400, detail="Ссылка уже использована")
+    if datetime.utcnow() > row.expires_at:
+        raise HTTPException(status_code=400, detail="Срок действия ссылки истёк")
+
+    user = database_session_instance.get(
+        UserAccountModel, int(recipient_user_account_identifier)
+    )
+    if user is None:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    user_email = _normalize_email_for_share(str(user.user_email_address))
+    if user_email != row.recipient_email_normalized:
+        raise HTTPException(
+            status_code=403,
+            detail="Это приглашение выдано на другой email",
+        )
+
+    new_topic = clone_topic_deck_to_recipient_user(
+        database_session_instance,
+        sharer_user_account_identifier=int(row.sharer_user_account_id),
+        source_topic_unique_identifier=int(row.source_topic_unique_identifier),
+        recipient_user_account_identifier=int(recipient_user_account_identifier),
+    )
+    row.consumed_at = datetime.utcnow()
+    row.recipient_user_account_id = int(recipient_user_account_identifier)
+    row.cloned_topic_unique_identifier = int(new_topic.topic_unique_identifier)
+    database_session_instance.add(row)
+    database_session_instance.commit()
+    database_session_instance.refresh(new_topic)
+    return new_topic
+
+
+def get_deck_share_token_preview(
+    database_session_instance: Session, share_token: str
+) -> dict:
+    """Публичное превью по токену (без авторизации)."""
+    row = database_session_instance.get(DeckShareTokenModel, share_token)
+    if row is None:
+        return {"valid": False}
+    if row.consumed_at is not None or datetime.utcnow() > row.expires_at:
+        return {"valid": False, "expired_or_used": True}
+    topic = database_session_instance.get(
+        LearningTopicModel, int(row.source_topic_unique_identifier)
+    )
+    sharer = database_session_instance.get(
+        UserAccountModel, int(row.sharer_user_account_id)
+    )
+    return {
+        "valid": True,
+        "topic_title": topic.topic_display_name if topic else None,
+        "recipient_email_hint": row.recipient_email_normalized,
+        "expires_at": row.expires_at.isoformat() + "Z",
+        "sharer_name": (
+            sharer.user_full_display_name if sharer else None
+        ),
+    }

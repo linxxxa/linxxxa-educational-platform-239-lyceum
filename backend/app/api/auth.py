@@ -1,19 +1,24 @@
 """
 Эндпоинты аутентификации: регистрация, вход, JWT.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token_for_user_account
+from app.core.rate_limit import limiter
+from app.core.security import (
+    create_access_token_for_user_account,
+    verify_plain_password_against_bcrypt_hash,
+)
 from app.database import get_database_session_generator
 from app.schemas.user import UserAccountCreate, UserAccountPublicInformation
 from app.services.auth_service import (
     perform_full_user_registration_flow,
     fetch_paginated_user_accounts_from_database,
+    fetch_user_account_by_email_address,
     convert_user_models_to_public_schemas,
-    verify_credentials_and_return_user,
 )
+from app.services.content_deck_service import accept_deck_share_token_for_user
 
 
 auth_router = APIRouter(prefix="/auth", tags=["Аутентификация"])
@@ -30,18 +35,25 @@ def authenticate_user_and_generate_token(
     Вход: email в поле username, пароль — в password.
     Возвращает access_token (JWT) и token_type.
     """
-    authenticated_user_account_object = verify_credentials_and_return_user(
-        database_connection_session,
-        oauth2_password_request_form.username,
-        oauth2_password_request_form.password,
+    email_normalized = oauth2_password_request_form.username.strip().lower()
+    user_row = fetch_user_account_by_email_address(
+        database_connection_session, email_normalized
     )
-    if authenticated_user_account_object is None:
+    if user_row is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверный email или пароль",
+            detail="Пользователь не найден",
+        )
+    if not verify_plain_password_against_bcrypt_hash(
+        oauth2_password_request_form.password,
+        user_row.user_hashed_password_string,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный пароль",
         )
     encrypted_access_token_string = create_access_token_for_user_account(
-        authenticated_user_account_object.user_email_address
+        user_row.user_email_address
     )
     return {
         "access_token": encrypted_access_token_string,
@@ -50,7 +62,9 @@ def authenticate_user_and_generate_token(
 
 
 @auth_router.post("/register", status_code=201)
+@limiter.limit("5/hour")
 def register_new_user_endpoint(
+    request: Request,
     user_registration_request_data: UserAccountCreate,
     database_session_instance: Session = Depends(
         get_database_session_generator
@@ -60,6 +74,7 @@ def register_new_user_endpoint(
     Регистрация нового пользователя.
     Делегирует логику сервису, возвращает данные созданного аккаунта.
     """
+    _ = request  # slowapi / rate limit
     # Вызов полного цикла регистрации (проверка email, хэш, сохранение)
     newly_created_user_object = perform_full_user_registration_flow(
         database_session_instance,
@@ -67,6 +82,22 @@ def register_new_user_endpoint(
         user_registration_request_data.user_email_address,
         user_registration_request_data.plain_text_password_for_hashing,
     )
+    cloned_topic_id = None
+    deck_share_error = None
+    raw_tok = user_registration_request_data.deck_share_token
+    if raw_tok and str(raw_tok).strip():
+        try:
+            cloned_topic = accept_deck_share_token_for_user(
+                database_session_instance,
+                share_token=str(raw_tok).strip(),
+                recipient_user_account_identifier=int(
+                    newly_created_user_object.user_unique_identifier
+                ),
+            )
+            cloned_topic_id = int(cloned_topic.topic_unique_identifier)
+        except HTTPException as exc:
+            deck_share_error = str(exc.detail)
+
     return {
         "message": "Пользователь успешно зарегистрирован",
         "user_unique_identifier": newly_created_user_object.user_unique_identifier,
@@ -74,6 +105,8 @@ def register_new_user_endpoint(
             newly_created_user_object.user_full_display_name
         ),
         "user_email_address": newly_created_user_object.user_email_address,
+        "cloned_topic_unique_identifier": cloned_topic_id,
+        "deck_share_error": deck_share_error,
     }
 
 

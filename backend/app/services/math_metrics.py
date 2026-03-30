@@ -8,6 +8,67 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Sequence
+
+
+def theme_mastery_weighted_percent(
+    last_quality_q_per_card: Sequence[int | None],
+) -> float:
+    """
+    Уровень освоения темы (колоды) 0–100% по весам карточек.
+
+    W = 100 / N. Для каждой карточки вклад W * (Q/5), если последний Q > 2,
+    иначе вклад 0. Q — дискретное 0–5 (SM-2 / субъективная оценка ответа).
+    """
+    n = len(last_quality_q_per_card)
+    if n <= 0:
+        return 0.0
+    weight = 100.0 / float(n)
+    total = 0.0
+    for q in last_quality_q_per_card:
+        if q is None:
+            continue
+        qi = int(q)
+        if qi <= 2:
+            continue
+        total += weight * (min(5, max(0, qi)) / 5.0)
+    return max(0.0, min(100.0, total))
+
+
+def learning_efficiency_percent_from_q_totals(
+    sum_quality_q: float, num_answers: int
+) -> float:
+    """
+    Устаревшая агрегатная формула (ΣQ)/(N·5)·100 — оставлена для совместимости.
+    """
+    if num_answers <= 0:
+        return 0.0
+    return max(
+        0.0,
+        min(
+            100.0,
+            (float(sum_quality_q) / (float(num_answers) * 5.0)) * 100.0,
+        ),
+    )
+
+
+def interaction_efficiency_percent(
+    is_correct: bool, q_discrete_when_correct: int
+) -> float:
+    """
+    Эффективность одного ответа:
+    (Base_Accuracy × 0.7) + (Q_bonus × 0.3).
+    Base_Accuracy: 100 % при верном, 0 % при ошибке.
+    Q_bonus: нормализованная Q (5 → 100 %, 3 → 60 %). При ошибке бонус как при Q=1 (20 %).
+    """
+    base_acc = 100.0 if is_correct else 0.0
+    if is_correct:
+        q_bonus = (
+            max(0, min(5, int(q_discrete_when_correct))) / 5.0
+        ) * 100.0
+    else:
+        q_bonus = 20.0
+    return max(0.0, min(100.0, 0.7 * base_acc + 0.3 * q_bonus))
 
 
 def calculate_learning_efficiency(

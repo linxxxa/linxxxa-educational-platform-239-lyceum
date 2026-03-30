@@ -27,17 +27,62 @@ from app.models.learning_topic import LearningTopicModel
 from app.schemas.study import SessionFinishPayload, UserAnswerSubmission
 from app.services.math_engine import (
     calculate_forgetting_rate,
-    calculate_session_efficiency_eta,
     calculate_session_delta_t_hours,
     calculate_topic_entropy,
     run_sm2_step,
     update_energy,
 )
-from app.services.math_metrics import (
-    calculate_learning_efficiency,
-    calculate_readiness_index,
+from app.services.user_analytics_service import (
+    average_topic_knowledge_level_0_100,
+    learning_efficiency_dashboard_display,
+    recalculate_topic_knowledge_level_for_owner,
+    refresh_user_global_stats,
+    session_learning_efficiency_percent_since,
+    sync_all_topic_knowledge_levels_for_user,
 )
-from app.services.user_analytics_service import refresh_user_global_stats
+
+# Шкала как у dashboard-home: readiness_index_ri = уровень_знаний_0_100 × 10.
+def _readiness_ri_from_avg_topic_knowledge(knowledge_0_100: float) -> float:
+    k = float(knowledge_0_100)
+    if not math.isfinite(k):
+        k = 50.0
+    return max(0.0, min(1000.0, k * 10.0))
+
+
+def _topic_has_any_user_progress(
+    database_session_instance: Session,
+    user_id: int,
+    topic_unique_identifier: int,
+) -> bool:
+    """Есть ли хотя бы одна запись прогресса по карточкам темы."""
+    n = database_session_instance.execute(
+        select(func.count())
+        .select_from(UserCardProgressModel)
+        .join(
+            LearningCardModel,
+            LearningCardModel.card_unique_identifier
+            == UserCardProgressModel.progress_target_card_unique_identifier,
+        )
+        .where(
+            LearningCardModel.parent_topic_reference_id
+            == int(topic_unique_identifier),
+            LearningCardModel.owner_user_account_id == user_id,
+            UserCardProgressModel.progress_owner_user_account_id == user_id,
+        )
+    ).scalar() or 0
+    return int(n) > 0
+
+
+def _format_deck_mastery_label(km_raw: float, has_any_progress: bool) -> str:
+    """Подпись «Освоено» для колоды; пустая строка — не показывать нулевой прогресс до первого ответа."""
+    if km_raw <= 0.0 and not has_any_progress:
+        return ""
+    if km_raw > 0.0 and km_raw < 1.0:
+        return "<1%"
+    if km_raw <= 0.0 and has_any_progress:
+        return "0%"
+    return f"{int(round(max(0.0, min(100.0, km_raw))))}%"
+
 
 logger = logging.getLogger(__name__)
 study_session_router = APIRouter(prefix="/study", tags=["Сессия обучения"])
@@ -617,9 +662,12 @@ def study_session_start_endpoint(
     Сбрасывает E=100 и счётчик карточек в Redis (TTL 2 ч).
     """
     user_id = authorized_student_user_account.user_unique_identifier
-    ri_before_value = float(
-        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    sync_all_topic_knowledge_levels_for_user(database_connection_session, user_id)
+    database_connection_session.flush()
+    avg_knowledge = average_topic_knowledge_level_0_100(
+        database_connection_session, user_id
     )
+    ri_before_value = _readiness_ri_from_avg_topic_knowledge(avg_knowledge)
     avg_mastery_before = (
         database_connection_session.execute(
             select(func.avg(UserCardProgressModel.progress_mastery_level)).where(
@@ -1039,6 +1087,7 @@ def submit_user_answer_endpoint(
             authorized_student_user_account.user_unique_identifier,
             bool(submitted_answer_data_transfer_object.submitted_user_answer_is_correct),
         )
+        uid = authorized_student_user_account.user_unique_identifier
         return {
             "session_completed": True,
             "is_correct": submitted_answer_data_transfer_object.submitted_user_answer_is_correct,
@@ -1058,6 +1107,11 @@ def submit_user_answer_endpoint(
             ),
             "topic_mastery_before": float(new_mastery_value),
             "topic_mastery_after": float(new_mastery_value),
+            "learning_efficiency_pct": float(
+                learning_efficiency_dashboard_display(
+                    database_connection_session, uid
+                )
+            ),
         }
 
     # calculated_question_quality_q_value вычислен выше.
@@ -1146,13 +1200,13 @@ def submit_user_answer_endpoint(
         )
     )
 
-    session_duration_hours_value = 25.0 / 60.0
     background_tasks.add_task(
-        _calculate_eta_and_ri_background_task,
+        _refresh_user_stats_after_answer_background_task,
         authorized_student_user_account_identifier=authorized_student_user_account.user_unique_identifier,
-        initial_mastery=previous_topic_mastery_average_value,
-        final_mastery=float(updated_topic_mastery_average_int),
-        session_duration_hours=session_duration_hours_value,
+    )
+
+    learning_efficiency_pct = learning_efficiency_dashboard_display(
+        database_connection_session, user_id
     )
 
     _increment_session_cards_done_redis(
@@ -1179,6 +1233,7 @@ def submit_user_answer_endpoint(
         ),
         "topic_mastery_before": float(previous_topic_mastery_average_value),
         "topic_mastery_after": float(updated_topic_mastery_average_int),
+        "learning_efficiency_pct": float(learning_efficiency_pct),
     }
 
 
@@ -1245,10 +1300,7 @@ def finish_session_endpoint(
     started_ts = datetime.utcnow().timestamp()
     answers_total = 0
     answers_correct = 0
-    ri_before = float(
-        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
-    )
-    mastery_before = 0.0
+    ri_before: float | None = None
 
     if redis_client is not None:
         redis_started = redis_client.get(f"session:{user_id}:started_at_ts")
@@ -1261,9 +1313,6 @@ def finish_session_endpoint(
         redis_ri = redis_client.get(f"session:{user_id}:ri_before")
         if redis_ri is not None:
             ri_before = float(redis_ri)
-        mastery_before = float(
-            redis_client.get(f"session:{user_id}:mastery_before") or 0.0
-        )
 
     if payload is not None and payload.ri_before_snapshot is not None:
         ri_before = float(payload.ri_before_snapshot)
@@ -1302,51 +1351,32 @@ def finish_session_endpoint(
         target_user_account_identifier=user_id,
     )
     database_connection_session.refresh(authorized_student_user_account)
-    ri_after = float(
-        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
-    )
 
-    avg_mastery_after = (
-        database_connection_session.execute(
-            select(func.avg(UserCardProgressModel.progress_mastery_level)).where(
-                UserCardProgressModel.progress_owner_user_account_id == user_id
-            )
-        ).scalar()
-        or 0.0
-    )
+    sync_all_topic_knowledge_levels_for_user(database_connection_session, user_id)
+    database_connection_session.flush()
 
-    unique_topics_count = (
-        database_connection_session.execute(
-            select(func.count(func.distinct(LearningCardModel.parent_topic_reference_id)))
-            .select_from(LearningInteractionModel)
-            .join(
-                LearningCardModel,
-                LearningCardModel.card_unique_identifier
-                == LearningInteractionModel.interaction_target_card_unique_identifier,
-            )
-            .where(
-                LearningInteractionModel.interaction_owner_user_account_id == user_id,
-                LearningInteractionModel.interaction_timestamp
-                >= datetime.utcfromtimestamp(started_ts),
-            )
-        ).scalar()
-        or 1
+    knowledge_after = average_topic_knowledge_level_0_100(
+        database_connection_session, user_id
     )
+    ri_after = _readiness_ri_from_avg_topic_knowledge(knowledge_after)
+    if ri_before is None:
+        ri_before = ri_after
 
-    eta_value = 0.0
-    if session_hours > 1e-9:
-        eta_value = calculate_session_efficiency_eta(
-            initial_mastery_m0=float(mastery_before),
-            final_mastery=float(avg_mastery_after),
-            session_duration_hours=float(session_hours),
-            unique_topics_count_k=int(unique_topics_count),
-        )
+    started_naive = datetime.utcfromtimestamp(float(started_ts))
+    eta_value = session_learning_efficiency_percent_since(
+        database_connection_session,
+        user_id,
+        since_timestamp=started_naive,
+    )
 
     accuracy_percent = (
         (100.0 * float(answers_correct) / float(answers_total))
         if answers_total > 0
         else 0.0
     )
+
+    kl_before = max(0.0, min(100.0, float(ri_before) / 10.0))
+    kl_after = max(0.0, min(100.0, float(knowledge_after)))
 
     return {
         "eta_percent": float(max(0.0, min(100.0, eta_value))),
@@ -1358,6 +1388,9 @@ def finish_session_endpoint(
         "total_response_time_ms": int(total_response_time_ms),
         "ri_before": float(ri_before),
         "ri_after": float(ri_after),
+        "knowledge_level_before": float(round(kl_before, 2)),
+        "knowledge_level_after": float(round(kl_after, 2)),
+        "delta_knowledge_level": float(round(kl_after - kl_before, 2)),
         "energy_left": float(
             _retrieve_or_initialize_user_energy_value_from_redis(user_id)[0]
         ),
@@ -1408,13 +1441,14 @@ def dashboard_insights_endpoint(
     )
     database_connection_session.refresh(authorized_student_user_account)
 
-    readiness_index_ri_value = float(
-        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    sync_all_topic_knowledge_levels_for_user(database_connection_session, user_id)
+    database_connection_session.flush()
+
+    avg_knowledge = average_topic_knowledge_level_0_100(
+        database_connection_session, user_id
     )
-    # Шкала 0–100 для UI: RI_view = RI / 10 (модель RI ∈ [0..1000]).
-    readiness_index_view_value = max(
-        0.0, min(100.0, readiness_index_ri_value / 10.0)
-    )
+    readiness_index_view_value = max(0.0, min(100.0, float(avg_knowledge)))
+    readiness_index_ri_value = readiness_index_view_value * 10.0
 
     # Простой daily delta: баланс правильных/неправильных ответов за 24ч.
     since_dt = datetime.utcnow() - timedelta(days=1)
@@ -1459,7 +1493,7 @@ def dashboard_insights_endpoint(
             LearningTopicModel.topic_display_name,
             LearningTopicModel.topic_entropy_value,
             LearningTopicModel.topic_entropy_complexity_value,
-            func.avg(UserCardProgressModel.progress_mastery_level).label(
+            func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).label(
                 "avg_mastery"
             ),
         )
@@ -1468,27 +1502,16 @@ def dashboard_insights_endpoint(
             LearningCardModel.parent_topic_reference_id
             == LearningTopicModel.topic_unique_identifier,
         )
-        .join(
-            UserCardProgressModel,
-            and_(
-                UserCardProgressModel.progress_target_card_unique_identifier
-                == LearningCardModel.card_unique_identifier,
-                UserCardProgressModel.progress_owner_user_account_id == user_id,
-            ),
-            isouter=True,
-        )
         .where(LearningTopicModel.topic_owner_user_id == user_id)
         .group_by(
             LearningTopicModel.topic_unique_identifier,
             LearningTopicModel.topic_display_name,
             LearningTopicModel.topic_entropy_value,
             LearningTopicModel.topic_entropy_complexity_value,
+            LearningTopicModel.topic_knowledge_level_0_100,
         )
         .order_by(
-            func.coalesce(
-                func.avg(UserCardProgressModel.progress_mastery_level),
-                0.0,
-            ).asc(),
+            func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).asc(),
         )
         .limit(24)
     )
@@ -1535,14 +1558,16 @@ def dashboard_home_endpoint(
     )
     database_connection_session.refresh(authorized_student_user_account)
 
-    readiness_index_ri_value = float(
-        authorized_student_user_account.last_calculated_readiness_index_ri or 0.0
+    sync_all_topic_knowledge_levels_for_user(database_connection_session, user_id)
+    database_connection_session.flush()
+
+    avg_knowledge = average_topic_knowledge_level_0_100(
+        database_connection_session, user_id
     )
-    if not math.isfinite(readiness_index_ri_value):
-        readiness_index_ri_value = 0.0
-    readiness_index_view_value = max(
-        0.0, min(100.0, readiness_index_ri_value / 10.0)
-    )
+    readiness_index_view_value = max(0.0, min(100.0, float(avg_knowledge)))
+    if not math.isfinite(readiness_index_view_value):
+        readiness_index_view_value = 0.0
+    readiness_index_ri_value = readiness_index_view_value * 10.0
 
     since_dt = datetime.utcnow() - timedelta(days=1)
     correct_recent = (
@@ -1663,22 +1688,13 @@ def dashboard_home_endpoint(
             streak_days += 1
             d_cursor -= timedelta(days=1)
 
-    mastery_rows = database_connection_session.execute(
-        select(UserCardProgressModel.progress_mastery_level).where(
-            UserCardProgressModel.progress_owner_user_account_id == user_id,
-        )
-    ).scalars().all()
-    mastery_levels = [float(x) for x in mastery_rows]
-    if mastery_levels:
-        mastery_mean = sum(mastery_levels) / float(len(mastery_levels))
-        mastery_std = statistics.pstdev(mastery_levels)
-    else:
-        mastery_mean = 0.0
-        mastery_std = 0.0
-    sigma_norm = max(0.0, 1.0 - mastery_std / 30.0)
     hours_val = float(authorized_student_user_account.total_learning_hours or 0.0)
-    mastery_avg_pct = int(round(max(0.0, min(100.0, mastery_mean))))
-    sigma_norm_pct = int(round(max(0.0, min(100.0, sigma_norm * 100.0))))
+    mastery_avg_pct = int(
+        round(max(0.0, min(100.0, float(avg_knowledge))))
+    )
+    learning_efficiency_pct = round(
+        learning_efficiency_dashboard_display(database_connection_session, user_id), 1
+    )
 
     weak_topics_query = (
         select(
@@ -1686,7 +1702,7 @@ def dashboard_home_endpoint(
             LearningTopicModel.topic_display_name,
             LearningTopicModel.topic_entropy_value,
             LearningTopicModel.topic_entropy_complexity_value,
-            func.avg(UserCardProgressModel.progress_mastery_level).label(
+            func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).label(
                 "avg_mastery"
             ),
         )
@@ -1695,27 +1711,16 @@ def dashboard_home_endpoint(
             LearningCardModel.parent_topic_reference_id
             == LearningTopicModel.topic_unique_identifier,
         )
-        .join(
-            UserCardProgressModel,
-            and_(
-                UserCardProgressModel.progress_target_card_unique_identifier
-                == LearningCardModel.card_unique_identifier,
-                UserCardProgressModel.progress_owner_user_account_id == user_id,
-            ),
-            isouter=True,
-        )
         .where(LearningTopicModel.topic_owner_user_id == user_id)
         .group_by(
             LearningTopicModel.topic_unique_identifier,
             LearningTopicModel.topic_display_name,
             LearningTopicModel.topic_entropy_value,
             LearningTopicModel.topic_entropy_complexity_value,
+            LearningTopicModel.topic_knowledge_level_0_100,
         )
         .order_by(
-            func.coalesce(
-                func.avg(UserCardProgressModel.progress_mastery_level),
-                0.0,
-            ).asc(),
+            func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).asc(),
         )
         .limit(24)
     )
@@ -1753,45 +1758,48 @@ def dashboard_home_endpoint(
             LearningTopicModel.topic_unique_identifier,
             LearningTopicModel.topic_display_name,
             LearningTopicModel.related_topics_count,
-            func.avg(UserCardProgressModel.progress_mastery_level).label("avg_m"),
+            func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).label(
+                "km"
+            ),
         )
         .join(
             LearningCardModel,
             LearningCardModel.parent_topic_reference_id
             == LearningTopicModel.topic_unique_identifier,
         )
-        .outerjoin(
-            UserCardProgressModel,
-            and_(
-                UserCardProgressModel.progress_target_card_unique_identifier
-                == LearningCardModel.card_unique_identifier,
-                UserCardProgressModel.progress_owner_user_account_id == user_id,
-            ),
-        )
         .where(LearningTopicModel.topic_owner_user_id == user_id)
         .group_by(
             LearningTopicModel.topic_unique_identifier,
             LearningTopicModel.topic_display_name,
             LearningTopicModel.related_topics_count,
+            LearningTopicModel.topic_knowledge_level_0_100,
         )
         .order_by(
-            func.coalesce(
-                func.avg(UserCardProgressModel.progress_mastery_level),
-                0.0,
-            ).asc(),
+            func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).asc(),
         )
         .limit(6)
     )
     deck_rows = database_connection_session.execute(decks_query).all()
     decks_out = []
     for dr in deck_rows:
-        avg_m = float(dr.avg_m or 0.0)
+        tid = int(dr.topic_unique_identifier)
+        km_raw = float(dr.km or 0.0)
+        has_any_progress = _topic_has_any_user_progress(
+            database_connection_session, user_id, tid
+        )
+        m_round = int(round(max(0.0, min(100.0, km_raw))))
+        if km_raw > 0.0 and km_raw < 1.0:
+            m_round = max(1, m_round)
+        show_mastery_zero = not (km_raw <= 0.0 and not has_any_progress)
         decks_out.append(
             {
-                "id": int(dr.topic_unique_identifier),
+                "id": tid,
                 "name": dr.topic_display_name,
                 "connections": int(dr.related_topics_count or 0),
-                "mastery": int(round(max(0.0, min(100.0, avg_m)))),
+                "mastery": m_round,
+                "mastery_raw": round(km_raw, 2),
+                "show_mastery_zero": show_mastery_zero,
+                "mastery_label": _format_deck_mastery_label(km_raw, has_any_progress),
             }
         )
 
@@ -1805,7 +1813,9 @@ def dashboard_home_endpoint(
         "accuracy_week_pct": accuracy_week_pct,
         "total_cards_studied": total_interactions,
         "mastery_avg_pct": mastery_avg_pct,
-        "sigma_norm_pct": sigma_norm_pct,
+        "learning_efficiency_pct": float(
+            max(0.0, min(100.0, learning_efficiency_pct))
+        ),
         "hours_learning": float(hours_val),
         "weak_topic_name": weak_topic_name,
         "weak_topic_mastery_pct": weak_topic_mastery_pct,
@@ -1919,6 +1929,9 @@ def _calculate_quality_q_value_from_is_correct_and_confidence(
 ) -> int:
     """Считает Q (0–5) по is_correct и confidence (ТЗ)."""
     if not submitted_answer_is_correct:
+        # Ошибка + завышенная уверенность: для SM-2 принудительно Q=1.
+        if submitted_user_subjective_confidence_score > 2.0:
+            return 1
         return 0
     if submitted_user_subjective_confidence_score >= 4.0:
         return 5
@@ -2154,6 +2167,12 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
         + time_spent_on_thinking_seconds_value / 3600.0
     )
     database_session_instance.add(authorized_student_user_account)
+    database_session_instance.flush()
+    recalculate_topic_knowledge_level_for_owner(
+        database_session_instance,
+        authorized_student_user_account.user_unique_identifier,
+        int(topic_unique_identifier),
+    )
     database_session_instance.commit()
 
     updated_topic_mastery_average_value = _fetch_topic_mastery_average_value(
@@ -2171,30 +2190,15 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
     )
 
 
-def _calculate_eta_and_ri_background_task(
+def _refresh_user_stats_after_answer_background_task(
     authorized_student_user_account_identifier: int,
-    initial_mastery: float,
-    final_mastery: float,
-    session_duration_hours: float,
 ) -> None:
     """
-    Фоновая задача: вызывает refresh_user_global_stats для агрегации
-    из interactions и progress в user_accounts (total_learning_hours,
-    last_calculated_readiness_index_ri).
+    После ответа: обновляет RI и часы в user_accounts (эффективность по Q
+    считается на лету из interactions при запросах API).
     """
     database_session_background = next(get_database_session_generator())
     try:
-        calculated_session_efficiency_coefficient = calculate_learning_efficiency(
-            initial_mastery=initial_mastery,
-            final_mastery=final_mastery,
-            session_duration_hours=session_duration_hours,
-            unique_topics_count=1,
-        )
-        logger.info(
-            "Расчёт эффективности сессии: user=%s, η=%.4f",
-            authorized_student_user_account_identifier,
-            calculated_session_efficiency_coefficient,
-        )
         refresh_user_global_stats(
             database_session_instance=database_session_background,
             target_user_account_identifier=authorized_student_user_account_identifier,

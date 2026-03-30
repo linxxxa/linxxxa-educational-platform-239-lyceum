@@ -162,6 +162,28 @@ def apply_learning_cards_schema_patch(engine: Engine) -> None:
             )
 
 
+def apply_learning_topics_knowledge_level_patch(engine: Engine) -> None:
+    """Добавляет learning_topics.topic_knowledge_level_0_100 (0–100)."""
+    try:
+        insp = inspect(engine)
+        if not insp.has_table("learning_topics"):
+            return
+    except Exception:
+        return
+
+    col_names = {c["name"] for c in insp.get_columns("learning_topics")}
+    if "topic_knowledge_level_0_100" in col_names:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE learning_topics "
+                "ADD COLUMN topic_knowledge_level_0_100 FLOAT DEFAULT 50.0"
+            )
+        )
+
+
 def apply_progress_last_quality_q_schema_patch(engine: Engine) -> None:
     """Добавляет progress.progress_last_quality_q для сортировки очереди (last Q)."""
     try:

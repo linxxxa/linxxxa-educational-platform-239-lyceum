@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.models.learning_card import LearningCardModel
 from app.models.learning_topic import LearningTopicModel
+from app.services.user_analytics_service import recalculate_topic_knowledge_level_for_owner
 
 
 def check_parent_topic_exists(database_session_instance, topic_identifier: int) -> bool:
@@ -39,4 +40,10 @@ def create_personal_learning_card_and_persist(
     database_session_instance.add(newly_created_card_object)
     database_session_instance.commit()
     database_session_instance.refresh(newly_created_card_object)
+    recalculate_topic_knowledge_level_for_owner(
+        database_session_instance,
+        owner_user_account_id,
+        parent_topic_reference_id,
+    )
+    database_session_instance.commit()
     return newly_created_card_object

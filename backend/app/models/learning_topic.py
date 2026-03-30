@@ -45,6 +45,9 @@ class LearningTopicModel(Base_Model_Declarative_Root):
         index=True,
     )
 
+    # Динамический «уровень знаний» по теме (0–100), обновляется с ответами.
+    topic_knowledge_level_0_100 = Column(Float, nullable=True, default=50.0)
+
     parent_subject = relationship(
         "LearningSubjectModel",
         back_populates="child_topics",

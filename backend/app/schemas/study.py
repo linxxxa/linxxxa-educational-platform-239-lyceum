@@ -1,7 +1,7 @@
 """Pydantic-схемы для сессий обучения."""
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 
 class UserAnswerSubmission(BaseModel):
@@ -18,7 +18,13 @@ class UserAnswerSubmission(BaseModel):
     """
 
     target_card_unique_identifier: int
-    submitted_user_answer_is_correct: bool
+    submitted_user_answer_is_correct: bool = Field(
+        ...,
+        validation_alias=AliasChoices(
+            "is_correct",
+            "submitted_user_answer_is_correct",
+        ),
+    )
     user_subjective_confidence_score: float
     response_thinking_time_seconds: float | None = None
     response_thinking_time_ms: float | None = None

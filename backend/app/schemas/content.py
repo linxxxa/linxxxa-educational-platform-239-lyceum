@@ -14,11 +14,16 @@ class SubjectMetadataTransferObject(BaseModel):
     @field_validator("subject_display_name")
     @classmethod
     def strip_name(cls, v: str) -> str:
-        """Очищает и валидирует название предмета."""
-        s = v.strip()
-        if not s:
-            raise ValueError("Название предмета обязательно")
-        return s
+        from app.utils.sanitize import assert_safe_display_name
+
+        return assert_safe_display_name(v, max_len=100)
+
+    @field_validator("subject_description_text")
+    @classmethod
+    def subject_desc(cls, v: str | None) -> str | None:
+        from app.utils.sanitize import assert_safe_optional_description
+
+        return assert_safe_optional_description(v, max_len=2000)
 
 
 class LearningSubjectResponseSchema(BaseModel):
@@ -41,9 +46,12 @@ class CardPayloadItem(BaseModel):
     @classmethod
     def non_empty_tex(cls, v: str) -> str:
         """Проверяет, что LaTeX поле не пустое и не слишком длинное."""
-        s = v.strip()
+        from app.utils.sanitize import reject_control_characters, strip_whitespace
+
+        s = strip_whitespace(v)
         if not s:
             raise ValueError("Поля LaTeX не могут быть пустыми")
+        s = reject_control_characters(s)
         if len(s) > 100_000:
             raise ValueError("Слишком длинный текст")
         return s
@@ -60,11 +68,16 @@ class DeckBatchSaveRequest(BaseModel):
     @field_validator("topic_title_name")
     @classmethod
     def topic_name_ok(cls, v: str) -> str:
-        """Проверяет, что название темы непустое."""
-        s = v.strip()
-        if not s:
-            raise ValueError("Название темы обязательно")
-        return s
+        from app.utils.sanitize import assert_safe_display_name
+
+        return assert_safe_display_name(v, max_len=100)
+
+    @field_validator("topic_description_text")
+    @classmethod
+    def topic_desc_ok(cls, v: str | None) -> str | None:
+        from app.utils.sanitize import assert_safe_optional_description
+
+        return assert_safe_optional_description(v, max_len=2000)
 
 
 class TopicUpdateRequest(BaseModel):
@@ -77,13 +90,18 @@ class TopicUpdateRequest(BaseModel):
     @field_validator("topic_display_name")
     @classmethod
     def validate_topic_display_name(cls, v: str | None) -> str | None:
-        """Проверяет, что название темы непустое (если передано)."""
         if v is None:
             return None
-        s = v.strip()
-        if not s:
-            raise ValueError("Название темы обязательно")
-        return s
+        from app.utils.sanitize import assert_safe_display_name
+
+        return assert_safe_display_name(v, max_len=100)
+
+    @field_validator("topic_description_text")
+    @classmethod
+    def validate_topic_description(cls, v: str | None) -> str | None:
+        from app.utils.sanitize import assert_safe_optional_description
+
+        return assert_safe_optional_description(v, max_len=2000)
 
 
 class TopicCardsBatchAddRequest(BaseModel):
@@ -100,11 +118,16 @@ class DeckShareByEmailRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def normalize_and_validate_email(cls, v: str) -> str:
-        s = v.strip()
-        if len(s) < 5 or len(s) > 255:
-            raise ValueError("Email должен быть от 5 до 255 символов")
+        from app.utils.sanitize import reject_control_characters, strip_whitespace
+
+        s = strip_whitespace(v).lower()
+        reject_control_characters(s)
+        if len(s) < 5 or len(s) > 100:
+            raise ValueError("Email должен быть от 5 до 100 символов")
         try:
             validate_email(s, check_deliverability=False)
         except EmailNotValidError:
             raise ValueError("Некорректный формат email") from None
-        return s.lower()
+        if "<" in s or ">" in s:
+            raise ValueError("Недопустимые символы в email")
+        return s
