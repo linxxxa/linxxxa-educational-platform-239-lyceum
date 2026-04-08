@@ -11,15 +11,7 @@ interface Props {
 
 function FormulaBlock({ latex }: { latex: string }) {
   const clean = latex.replace(/\$\$/g, "").trim();
-  try {
-    return <BlockMath math={clean} />;
-  } catch {
-    return (
-      <span className="font-mono text-[14px] text-neutral-700 dark:text-neutral-300">
-        {latex}
-      </span>
-    );
-  }
+  return <BlockMath math={clean} />;
 }
 
 export default function CardQuestion({ card, onShowAnswer }: Props) {

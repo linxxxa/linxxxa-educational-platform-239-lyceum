@@ -1,5 +1,5 @@
 """Pydantic-схемы для сессий обучения."""
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
@@ -81,6 +81,30 @@ class SessionInteractionItem(BaseModel):
     is_correct: bool
     response_time_ms: int = Field(..., ge=0, le=3_600_000)
     topic_id: int
+
+
+class MatchingBatchResultItem(BaseModel):
+    """Одна карточка в пакете результатов сопоставления."""
+
+    card_id: int = Field(
+        ...,
+        validation_alias=AliasChoices("card_id", "target_card_unique_identifier"),
+    )
+    q_value: int = Field(..., ge=1, le=5)
+    mode: Literal["matching"] = "matching"
+
+
+class MatchingBatchRequest(BaseModel):
+    """Пакетное обновление прогресса после раунда сопоставления."""
+
+    results: list[MatchingBatchResultItem]
+    topic_id: int = Field(..., description="Тема колоды; все card_id должны из неё.")
+    session_id: str | None = None
+    total_response_time_ms: int | None = Field(
+        default=None,
+        ge=0,
+        description="Суммарное время раунда; делится поровну между карточками.",
+    )
 
 
 class SessionFinishPayload(BaseModel):

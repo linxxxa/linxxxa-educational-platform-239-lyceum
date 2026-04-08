@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getToken } from "@/lib/auth";
@@ -43,6 +43,7 @@ function normalizeDeck(d: unknown): Deck {
     id: Math.floor(num(o.id, 0)),
     name: typeof o.name === "string" ? o.name : "Без названия",
     connections: Math.max(0, Math.floor(num(o.connections, 0))),
+    cards_count: Math.max(0, Math.floor(num(o.cards_count, 0))),
     mastery,
     mastery_label: ml !== undefined && ml !== "" ? ml : undefined,
     show_mastery_zero: o.show_mastery_zero !== false,
@@ -139,12 +140,20 @@ export default function DashboardPage() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<DashboardHomePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const didLoadRef = useRef(false);
 
   useEffect(() => {
     const shareToken = searchParams.get("shareToken")?.trim();
     if (shareToken) {
       router.replace(`/decks/share/${encodeURIComponent(shareToken)}`);
     }
+  }, [router, searchParams]);
+
+  useEffect(() => {
+    const r = searchParams.get("refresh");
+    if (r !== "1" && r !== "progress") return;
+    window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
+    router.replace("/dashboard", { scroll: false });
   }, [router, searchParams]);
 
   const load = useCallback(async () => {
@@ -169,9 +178,10 @@ export default function DashboardPage() {
     setData(normalizeDashboardPayload(json));
   }, [router]);
 
-  useEffect(() => {
+  if (!didLoadRef.current) {
+    didLoadRef.current = true;
     void load();
-  }, [load]);
+  }
 
   useEffect(() => {
     const onRefresh = () => void load();

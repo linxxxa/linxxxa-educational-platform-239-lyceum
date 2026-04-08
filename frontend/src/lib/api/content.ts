@@ -130,6 +130,44 @@ export async function addCardsToTopic(
   }>;
 }
 
+export interface TopicCardListItem {
+  card_id: number;
+  question_text: string;
+  answer_text: string;
+  /** 0–100, из прогресса пользователя; по умолчанию 0 */
+  mastery_level?: number;
+}
+
+export async function fetchCardsInTopic(
+  topicId: number,
+  limit = 200
+): Promise<TopicCardListItem[]> {
+  const res = await fetch(
+    `/api/content/topics/${topicId}/cards?limit=${encodeURIComponent(String(limit))}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const msg =
+      typeof e.detail === "string" ? e.detail : "Ошибка загрузки карточек";
+    throw new Error(msg);
+  }
+  const j = (await res.json().catch(() => ({}))) as { cards?: unknown };
+  const arr = Array.isArray(j.cards) ? j.cards : [];
+  return arr
+    .map((x) => (x && typeof x === "object" ? (x as Record<string, unknown>) : {}))
+    .map((o) => ({
+      card_id: Number(o.card_id) || 0,
+      question_text: typeof o.question_text === "string" ? o.question_text : "",
+      answer_text: typeof o.answer_text === "string" ? o.answer_text : "",
+      mastery_level:
+        typeof o.mastery_level === "number" && Number.isFinite(o.mastery_level)
+          ? o.mastery_level
+          : 0,
+    }))
+    .filter((c) => c.card_id > 0);
+}
+
 function detailMessageFromResponse(e: unknown): string | null {
   if (!e || typeof e !== "object") return null;
   const d = (e as { detail?: unknown }).detail;

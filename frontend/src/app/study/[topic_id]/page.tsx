@@ -10,12 +10,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import confetti from "canvas-confetti";
 import { fetchTopics } from "@/lib/api/content";
 import { getToken } from "@/lib/auth";
 import { answerRedundantWithQuestion, sameCardText } from "@/lib/card-text";
 import { formatStudyTimeHours } from "@/lib/format-study-time";
+import { MatchingMode } from "@/components/session/MatchingMode";
 
 type Confidence = "тяжело" | "средне" | "легко";
 /** FSM: Question → Checking → Comparison → Rating → Transition → next card */
@@ -185,20 +186,7 @@ function SummaryCounter({
     }
     return Math.max(0, Math.min(100, Math.round(ri / 10)));
   };
-  const fromNorm = toNorm(knowledgeBefore, fromRi);
-  const [value, setValue] = useState(fromNorm);
-  useEffect(() => {
-    const fromN = toNorm(knowledgeBefore, fromRi);
-    const toN = toNorm(knowledgeAfter, toRi);
-    setValue(fromN);
-    const start = Date.now();
-    const timer = window.setInterval(() => {
-      const p = Math.min(1, (Date.now() - start) / 700);
-      setValue(Math.round(fromN + (toN - fromN) * p));
-      if (p >= 1) window.clearInterval(timer);
-    }, 30);
-    return () => window.clearInterval(timer);
-  }, [fromRi, toRi, knowledgeBefore, knowledgeAfter]);
+  const value = toNorm(knowledgeAfter, toRi);
   return (
     <div className="flex flex-col items-center gap-0.5">
       <div className="font-[var(--font-geist-mono)] text-5xl font-medium tabular-nums">
@@ -244,7 +232,11 @@ export default function StudyTopicPage({
   params: Promise<{ topic_id: string }>;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [topicId, setTopicId] = useState("");
+  const mode = (searchParams.get("mode") || "").toLowerCase();
+  const isMatchMode = mode === "match";
+  const startedForTopicRef = useRef<string | null>(null);
   const [session, setSession] = useState<SessionState>({ energy: 100, cards_done: 0, cards_total: 0 });
   const [energy, setEnergy] = useState(100);
   const [card, setCard] = useState<StudyCard | null>(null);
@@ -414,16 +406,12 @@ export default function StudyTopicPage({
       origin: { y: 0.6 },
       colors: ["#262626", "#737373", "#A3A3A3", "#E5E5E5"],
     });
-  }, [summaryLoaded, energy]);
+  }, [summaryLoaded, energy, router]);
 
-  useEffect(() => {
-    if (!topicId) return;
+  if (!isMatchMode && topicId && startedForTopicRef.current !== topicId) {
+    startedForTopicRef.current = topicId;
     void startSession();
-  }, [topicId]);
-
-  useEffect(() => {
-    if (stage === "FINISHED") void finishSession();
-  }, [stage, finishSession]);
+  }
 
   const energyContext = useMemo(() => ({ energy, setEnergy }), [energy]);
   const accuracyDisplay = useMemo(
@@ -498,6 +486,7 @@ export default function StudyTopicPage({
 
       if (data.session_completed || nextEnergy < 10) {
         setShowBreakHint(Boolean(data.suggest_break));
+        await finishSession();
         setStage("FINISHED");
         return;
       }
@@ -510,10 +499,11 @@ export default function StudyTopicPage({
       );
       await loadNextCard(nextSeen);
     },
-    [card, isCorrect, submittedAnswer, energy, loadNextCard, seenCardIds]
+    [card, isCorrect, submittedAnswer, energy, loadNextCard, seenCardIds, finishSession, topicId]
   );
 
   useEffect(() => {
+    if (isMatchMode) return;
     if (stage !== "QUESTION" || !card) return;
     responseTimeMsRef.current = null;
     let cancelled = false;
@@ -528,9 +518,10 @@ export default function StudyTopicPage({
       window.cancelAnimationFrame(outerRaf);
       window.cancelAnimationFrame(innerRaf);
     };
-  }, [stage, card?.card_id]);
+  }, [stage, card?.card_id, isMatchMode]);
 
   useEffect(() => {
+    if (isMatchMode) return;
     const handler = (e: KeyboardEvent) => {
       if (!card) return;
       if (stage === "QUESTION" && e.key === "Enter" && !e.shiftKey) {
@@ -549,7 +540,19 @@ export default function StudyTopicPage({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [card, stage, handleCheck, handleConfidence]);
+  }, [card, stage, handleCheck, handleConfidence, isMatchMode]);
+
+  if (isMatchMode) {
+    const tid = Number(topicId) || 0;
+    return (
+      <MatchingMode
+        topicId={tid}
+        pairsParam={searchParams.get("pairs")}
+        timerParam={searchParams.get("timer")}
+        onExit={() => router.push("/dashboard")}
+      />
+    );
+  }
 
   return (
     <StudyEnergyContext.Provider value={energyContext}>

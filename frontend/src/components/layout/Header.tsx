@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { clearToken } from "@/lib/auth";
@@ -15,7 +15,7 @@ interface HeaderProps {
 function Header({ className, variant = "default" }: HeaderProps) {
   const router = useRouter();
   const authed = useAuthState();
-  const [mounted, setMounted] = useState(false);
+  const mounted = true;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const burgerRef = useRef<HTMLButtonElement>(null);
@@ -31,10 +31,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
     router.push("/");
   };
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
+  // close menu on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;

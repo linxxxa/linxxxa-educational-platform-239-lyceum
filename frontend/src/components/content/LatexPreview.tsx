@@ -16,18 +16,10 @@ export function LatexPreview({ latex, label }: LatexPreviewProps) {
       </div>
     );
   }
-  try {
-    const clean = t.replace(/\$\$/g, "").trim();
-    return (
-      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 dark:border-neutral-700 dark:bg-neutral-800/80">
-        <BlockMath math={clean} />
-      </div>
-    );
-  } catch {
-    return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-        Не удалось отрендерить LaTeX. Проверьте синтаксис.
-      </div>
-    );
-  }
+  const clean = t.replace(/\$\$/g, "").trim();
+  return (
+    <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 dark:border-neutral-700 dark:bg-neutral-800/80">
+      <BlockMath math={clean} />
+    </div>
+  );
 }

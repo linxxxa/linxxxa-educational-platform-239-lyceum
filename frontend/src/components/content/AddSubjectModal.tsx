@@ -37,15 +37,6 @@ export function AddSubjectModal({ open, onClose, onSave }: AddSubjectModalProps)
 
   useEffect(() => {
     if (!open) return;
-    setSaveError(null);
-    reset({
-      subject_display_name: "",
-      subject_description_text: "",
-    });
-  }, [open, reset]);
-
-  useEffect(() => {
-    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };

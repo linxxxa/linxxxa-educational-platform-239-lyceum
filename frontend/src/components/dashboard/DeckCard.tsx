@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
+import { Puzzle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { shareDeckByEmail } from "@/lib/api/content";
@@ -14,6 +15,7 @@ export interface Deck {
   id: number;
   name: string;
   connections: number;
+  cards_count?: number;
   /** 0–100, ширина полосы освоения */
   mastery: number;
   /** Подпись вида «66%», «<1%»; пусто — до первого ответа не показываем «0%». */
@@ -56,6 +58,11 @@ export default function DeckCard({ deck }: DeckCardProps) {
       : deck.show_mastery_zero === false
         ? null
         : `Освоено: ${m}%`;
+  const cardsCount = Math.max(0, Math.floor(Number(deck.cards_count ?? 0) || 0));
+  const matchDisabled = cardsCount > 0 && cardsCount < 3;
+  const matchHint = matchDisabled
+    ? "Добавьте еще хотя бы 2 карточки, чтобы начать игру"
+    : "Сопоставление";
   const [shareOpen, setShareOpen] = useState(false);
   const [shareOk, setShareOk] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
@@ -182,6 +189,22 @@ export default function DeckCard({ deck }: DeckCardProps) {
         >
           Повторить
         </Link>
+        <span
+          className={`inline-flex ${matchDisabled ? "cursor-not-allowed opacity-40" : ""}`}
+          title={matchHint}
+        >
+          <Link
+            aria-disabled={matchDisabled}
+            tabIndex={matchDisabled ? -1 : 0}
+            href={matchDisabled ? `/study/${deck.id}` : `/study/${deck.id}?mode=match`}
+            onClick={(e) => {
+              if (matchDisabled) e.preventDefault();
+            }}
+            className="inline-flex h-9 w-9 items-center justify-center rounded border border-neutral-200 text-neutral-600 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            <Puzzle className="h-4 w-4" />
+          </Link>
+        </span>
         <div className="relative ml-auto md:ml-0" ref={menuRef}>
           <button
             type="button"

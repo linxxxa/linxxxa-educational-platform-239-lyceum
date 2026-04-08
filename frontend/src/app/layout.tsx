@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
+import { PendingMatchingSync } from "@/components/sync/PendingMatchingSync";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,6 +34,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-neutral-100 font-[var(--font-inter)] tracking-[-0.011em] dark:bg-neutral-950">
+        <PendingMatchingSync />
         {children}
       </body>
     </html>

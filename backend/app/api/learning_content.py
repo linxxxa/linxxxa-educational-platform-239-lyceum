@@ -1,11 +1,15 @@
 """Управление контентом: предметы, колоды, пакет карточек (239 Protocol)."""
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_authorized_user_object
 from app.core.rate_limit import limiter
 from app.database import get_database_session_generator
+from app.models.learning_card import LearningCardModel
+from app.models.learning_topic import LearningTopicModel
 from app.models.user_account import UserAccountModel
+from app.models.user_card_progress import UserCardProgressModel
 from app.schemas.content import (
     DeckBatchSaveRequest,
     DeckShareByEmailRequest,
@@ -76,6 +80,66 @@ def create_learning_subject_endpoint(
         subject_metadata_transfer_object.subject_description_text,
     )
     return _subject_to_schema(row)
+
+
+@learning_content_router.get("/topics/{topic_id}/cards")
+def list_cards_in_topic_endpoint(
+    topic_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
+):
+    """
+    Возвращает карточки колоды для режимов игры (matching/sprint).
+    Только владелец колоды.
+    """
+    topic = database_connection_session.get(LearningTopicModel, int(topic_id))
+    if topic is None:
+        return {"cards": []}
+    if int(topic.topic_owner_user_id or 0) != int(
+        authorized_user.user_unique_identifier
+    ):
+        return {"cards": []}
+
+    uid = int(authorized_user.user_unique_identifier)
+    rows = (
+        database_connection_session.execute(
+            select(
+                LearningCardModel.card_unique_identifier,
+                LearningCardModel.card_question_text_payload,
+                LearningCardModel.card_answer_text_payload,
+                func.coalesce(
+                    UserCardProgressModel.progress_mastery_level, 0.0
+                ),
+            )
+            .outerjoin(
+                UserCardProgressModel,
+                (
+                    UserCardProgressModel.progress_target_card_unique_identifier
+                    == LearningCardModel.card_unique_identifier
+                )
+                & (UserCardProgressModel.progress_owner_user_account_id == uid),
+            )
+            .where(
+                LearningCardModel.parent_topic_reference_id == int(topic_id),
+                LearningCardModel.owner_user_account_id == uid,
+            )
+            .order_by(LearningCardModel.card_unique_identifier.asc())
+            .limit(int(limit))
+        )
+        .all()
+    )
+    return {
+        "cards": [
+            {
+                "card_id": int(r[0]),
+                "question_text": str(r[1] or ""),
+                "answer_text": str(r[2] or ""),
+                "mastery_level": float(r[3] or 0.0),
+            }
+            for r in rows
+        ]
+    }
 
 
 @learning_content_router.post("/decks/batch", status_code=201)

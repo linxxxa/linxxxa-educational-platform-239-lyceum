@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,6 +14,7 @@ export default function DeckShareClient({ token }: { token: string }) {
   const [title, setTitle] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
+  const didRunRef = useRef(false);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -58,9 +59,10 @@ export default function DeckShareClient({ token }: { token: string }) {
     }
   }, [token, router]);
 
-  useEffect(() => {
+  if (!didRunRef.current) {
+    didRunRef.current = true;
     void run();
-  }, [run]);
+  }
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-neutral-50 px-4 dark:bg-neutral-950">

@@ -24,7 +24,11 @@ from app.models.learning_interaction import (
 from app.models.user_account import UserAccountModel
 from app.models.user_card_progress import UserCardProgressModel
 from app.models.learning_topic import LearningTopicModel
-from app.schemas.study import SessionFinishPayload, UserAnswerSubmission
+from app.schemas.study import (
+    MatchingBatchRequest,
+    SessionFinishPayload,
+    UserAnswerSubmission,
+)
 from app.services.math_engine import (
     calculate_forgetting_rate,
     calculate_session_delta_t_hours,
@@ -1048,12 +1052,23 @@ def submit_user_answer_endpoint(
         submitted_answer_data_transfer_object.response_thinking_time_seconds
         * 1000.0
     )
-    calculated_question_quality_q_value = (
-        _calculate_quality_q_value_from_is_correct_and_confidence(
-            submitted_answer_is_correct=submitted_answer_is_correct,
-            submitted_user_subjective_confidence_score=submitted_user_subjective_confidence_score,
+    matching_mastery_multiplier = 1.0
+    if (
+        getattr(submitted_answer_data_transfer_object, "answer_mode", None)
+        == "matching"
+        and submitted_answer_data_transfer_object.explicit_quality_q is not None
+    ):
+        calculated_question_quality_q_value = int(
+            submitted_answer_data_transfer_object.explicit_quality_q
         )
-    )
+        matching_mastery_multiplier = 0.7
+    else:
+        calculated_question_quality_q_value = (
+            _calculate_quality_q_value_from_is_correct_and_confidence(
+                submitted_answer_is_correct=submitted_answer_is_correct,
+                submitted_user_subjective_confidence_score=submitted_user_subjective_confidence_score,
+            )
+        )
     remaining_user_cognitive_energy = (
         _apply_energy_update_in_redis_or_initialize(
             database_session_instance=database_connection_session,
@@ -1197,6 +1212,7 @@ def submit_user_answer_endpoint(
             calculated_question_quality_q_value=calculated_question_quality_q_value,
             calculated_new_easiness_factor=calculated_new_easiness_factor,
             repetition_interval_days_count=repetition_interval_days_count,
+            mastery_gain_multiplier=matching_mastery_multiplier,
         )
     )
 
@@ -1234,6 +1250,76 @@ def submit_user_answer_endpoint(
         "topic_mastery_before": float(previous_topic_mastery_average_value),
         "topic_mastery_after": float(updated_topic_mastery_average_int),
         "learning_efficiency_pct": float(learning_efficiency_pct),
+    }
+
+
+@study_session_router.post("/matching-batch-update")
+def matching_batch_update_endpoint(
+    body: MatchingBatchRequest,
+    background_tasks: BackgroundTasks,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_student_user_account: UserAccountModel = Depends(
+        get_current_authorized_user_object
+    ),
+):
+    """
+    Пакетное обновление после раунда сопоставления: одна транзакция запросов
+    в pipeline ответа с mode=matching и коэффициентом мастерства 0.7.
+    """
+    uid = int(authorized_student_user_account.user_unique_identifier)
+    topic = database_connection_session.get(LearningTopicModel, int(body.topic_id))
+    if topic is None or int(topic.topic_owner_user_id or 0) != uid:
+        raise HTTPException(status_code=404, detail="Тема не найдена")
+
+    if not body.results:
+        return {"ok": True, "processed": 0, "energy_left": None}
+
+    n = len(body.results)
+    total_ms = body.total_response_time_ms
+    per_ms = max(1, int(total_ms) // n) if total_ms is not None else 1000
+
+    last_result: dict | None = None
+    processed = 0
+    for item in body.results:
+        card = database_connection_session.get(LearningCardModel, int(item.card_id))
+        if card is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Карточка {item.card_id} не найдена",
+            )
+        if int(card.parent_topic_reference_id) != int(body.topic_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Карточка не принадлежит указанной теме",
+            )
+        if int(card.owner_user_account_id) != uid:
+            raise HTTPException(status_code=403, detail="Нет доступа к карточке")
+
+        sub = UserAnswerSubmission(
+            target_card_unique_identifier=int(item.card_id),
+            submitted_user_answer_is_correct=True,
+            user_subjective_confidence_score=float(item.q_value),
+            response_thinking_time_ms=float(per_ms),
+            user_answer="",
+            answer_mode="matching",
+            explicit_quality_q=int(item.q_value),
+        )
+        last_result = submit_user_answer_endpoint(
+            background_tasks=background_tasks,
+            submitted_answer_data_transfer_object=sub,
+            database_connection_session=database_connection_session,
+            authorized_student_user_account=authorized_student_user_account,
+        )
+        processed += 1
+        if float(last_result.get("energy_left", 1.0)) <= 0.0:
+            break
+
+    return {
+        "ok": True,
+        "processed": processed,
+        "energy_left": float(last_result.get("energy_left", 0.0))
+        if last_result
+        else None,
     }
 
 
@@ -1796,6 +1882,7 @@ def dashboard_home_endpoint(
                 "id": tid,
                 "name": dr.topic_display_name,
                 "connections": int(dr.related_topics_count or 0),
+                "cards_count": int(dr.related_topics_count or 0),
                 "mastery": m_round,
                 "mastery_raw": round(km_raw, 2),
                 "show_mastery_zero": show_mastery_zero,
@@ -2055,6 +2142,7 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
     calculated_question_quality_q_value: int,
     calculated_new_easiness_factor: float,
     repetition_interval_days_count: int,
+    mastery_gain_multiplier: float = 1.0,
 ) -> tuple[datetime, int, float]:
     """
     Записывает user_interaction_history_log и обновляет UserCardProgress.
@@ -2106,11 +2194,13 @@ def _create_interaction_and_update_progress_and_topic_mastery_average(
         if existing_progress_record is not None
         else 0.0
     )
-    mastery_delta_value = (
+    mult = max(0.0, float(mastery_gain_multiplier))
+    raw_mastery_delta = (
         float(calculated_question_quality_q_value) * 2.0
         if submitted_answer_is_correct
         else -float(calculated_question_quality_q_value)
     )
+    mastery_delta_value = raw_mastery_delta * mult
     calculated_new_mastery_level_value = min(
         100.0,
         max(
