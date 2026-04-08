@@ -39,6 +39,14 @@ export async function login(
 
 const AUTH_CHANGE_EVENT = "edulab-auth-change";
 
+/** Токен приглашения «забрать колоду» (если нужен повтор после входа). */
+export const PENDING_DECK_SHARE_TOKEN_KEY = "edulab_pending_deck_share_token";
+
+/** Разрешить только относительные пути на том же origin (защита от open redirect). */
+export function isSafeInternalPath(next: string | null | undefined): next is string {
+  return typeof next === "string" && next.startsWith("/") && !next.startsWith("//");
+}
+
 function notifyAuthChange(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));

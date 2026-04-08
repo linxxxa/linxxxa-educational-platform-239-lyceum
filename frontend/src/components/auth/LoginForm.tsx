@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
-import { saveToken } from "@/lib/auth";
-
-interface FormData {
-  email: string;
-  password: string;
-}
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useForm, type UseFormRegisterReturn } from "react-hook-form";
+import {
+  isSafeInternalPath,
+  PENDING_DECK_SHARE_TOKEN_KEY,
+  saveToken,
+} from "@/lib/auth";
+import { loginSchema, type LoginInput } from "@/lib/validations/login";
 
 interface FormErrors {
   email?: string;
@@ -18,24 +20,25 @@ interface FormErrors {
 
 export default function LoginForm() {
   const router = useRouter();
-  const [form, setForm] = useState<FormData>({ email: "", password: "" });
-  const [errors, setErrors] = useState<FormErrors>({});
-  const [loading, setLoading] = useState(false);
+  const searchParams = useSearchParams();
+  const [serverError, setServerError] = useState<string | null>(null);
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginInput>({
+    resolver: zodResolver(loginSchema),
+    mode: "onTouched",
+    reValidateMode: "onChange",
+    defaultValues: { email: "", password: "" },
+  });
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-    setErrors((prev) => ({ ...prev, [e.target.name]: undefined }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setErrors({});
-
+  const onSubmit = handleSubmit(async (values) => {
+    setServerError(null);
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify(values),
     });
 
     const data = (await res.json().catch(() => ({}))) as {
@@ -45,19 +48,32 @@ export default function LoginForm() {
     };
 
     if (!res.ok) {
-      setErrors(data.errors ?? { general: data.message ?? "Ошибка входа" });
-      setLoading(false);
+      setServerError(
+        data.errors?.general ?? data.message ?? "Ошибка входа"
+      );
       return;
     }
 
     if (data.access_token) {
       saveToken(data.access_token);
-      router.replace("/");
+      const nextRaw = searchParams.get("next");
+      let dest: string | null = null;
+      if (isSafeInternalPath(nextRaw)) {
+        dest = nextRaw;
+      } else if (typeof window !== "undefined") {
+        const pending = window.localStorage.getItem(
+          PENDING_DECK_SHARE_TOKEN_KEY
+        );
+        if (pending?.trim()) {
+          dest = `/decks/share/${encodeURIComponent(pending.trim())}`;
+          window.localStorage.removeItem(PENDING_DECK_SHARE_TOKEN_KEY);
+        }
+      }
+      router.replace(dest ?? "/");
     } else {
-      setErrors({ general: "Не удалось получить токен" });
+      setServerError("Не удалось получить токен");
     }
-    setLoading(false);
-  };
+  });
 
   return (
     <div className="w-full max-w-[400px] rounded-xl border border-neutral-200 bg-white p-8 dark:border-neutral-800 dark:bg-neutral-900">
@@ -83,22 +99,21 @@ export default function LoginForm() {
         </Link>
       </p>
 
-      {errors.general && (
+      {serverError && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          {errors.general}
+          {serverError}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
         <Field
           label="Email"
           name="email"
           type="email"
           placeholder="you@239.ru"
-          value={form.email}
-          onChange={handleChange}
-          error={errors.email}
           autoComplete="email"
+          reg={register("email")}
+          error={errors.email?.message}
         />
 
         <Field
@@ -106,18 +121,17 @@ export default function LoginForm() {
           name="password"
           type="password"
           placeholder="Ваш пароль"
-          value={form.password}
-          onChange={handleChange}
-          error={errors.password}
           autoComplete="current-password"
+          reg={register("password")}
+          error={errors.password?.message}
         />
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={isSubmitting}
           className="mt-2 w-full rounded-md bg-[#2F3437] py-2.5 text-[13px] font-medium text-white transition-opacity duration-150 hover:opacity-[0.85] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Входим…" : "Войти →"}
+          {isSubmitting ? "Входим…" : "Войти →"}
         </button>
       </form>
 
@@ -136,32 +150,34 @@ function Field({
   name,
   type,
   placeholder,
-  value,
-  onChange,
-  error,
   autoComplete,
+  reg,
+  error,
 }: {
   label: string;
-  name: string;
+  name: keyof LoginInput;
   type: string;
   placeholder: string;
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  error?: string;
   autoComplete?: string;
+  reg: UseFormRegisterReturn<keyof LoginInput>;
+  error?: string;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-[12px] font-medium text-neutral-700 dark:text-neutral-300">
+      <label
+        htmlFor={String(name)}
+        className="text-[12px] font-medium text-neutral-700 dark:text-neutral-300"
+      >
         {label}
       </label>
       <input
-        name={name}
+        id={String(name)}
         type={type}
         placeholder={placeholder}
-        value={value}
-        onChange={onChange}
-        autoComplete={autoComplete ?? name}
+        autoComplete={autoComplete ?? String(name)}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={error ? `${String(name)}-err` : undefined}
+        {...reg}
         className={`
           h-9 w-full rounded-md border px-3 text-[13px] outline-none transition-colors duration-150
           placeholder:text-neutral-400
@@ -175,7 +191,9 @@ function Field({
         `}
       />
       {error && (
-        <span className="text-[11px] text-red-500">{error}</span>
+        <span id={`${String(name)}-err`} className="text-[11px] text-red-500">
+          {error}
+        </span>
       )}
     </div>
   );

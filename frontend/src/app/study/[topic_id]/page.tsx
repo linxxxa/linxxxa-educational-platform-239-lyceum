@@ -61,6 +61,10 @@ interface SessionFinishSummary {
   total_response_time_ms?: number;
   ri_before: number;
   ri_after: number;
+  /** Динамический уровень знаний 0–100 (как на дашборде), явно от бэкенда. */
+  knowledge_level_before?: number;
+  knowledge_level_after?: number;
+  delta_knowledge_level?: number;
   energy_left: number;
 }
 
@@ -161,12 +165,31 @@ function StudyExitButton({ onExit }: { onExit: () => void }) {
   );
 }
 
-function SummaryCounter({ fromRi, toRi }: { fromRi: number; toRi: number }) {
-  const fromNorm = Math.max(0, Math.min(100, Math.round(fromRi / 10)));
+function SummaryCounter({
+  fromRi,
+  toRi,
+  knowledgeBefore,
+  knowledgeAfter,
+}: {
+  fromRi: number;
+  toRi: number;
+  knowledgeBefore?: number;
+  knowledgeAfter?: number;
+}) {
+  const toNorm = (
+    kb: number | undefined,
+    ri: number
+  ): number => {
+    if (kb != null && Number.isFinite(kb)) {
+      return Math.max(0, Math.min(100, Math.round(kb)));
+    }
+    return Math.max(0, Math.min(100, Math.round(ri / 10)));
+  };
+  const fromNorm = toNorm(knowledgeBefore, fromRi);
   const [value, setValue] = useState(fromNorm);
   useEffect(() => {
-    const fromN = Math.max(0, Math.min(100, Math.round(fromRi / 10)));
-    const toN = Math.max(0, Math.min(100, Math.round(toRi / 10)));
+    const fromN = toNorm(knowledgeBefore, fromRi);
+    const toN = toNorm(knowledgeAfter, toRi);
     setValue(fromN);
     const start = Date.now();
     const timer = window.setInterval(() => {
@@ -175,7 +198,7 @@ function SummaryCounter({ fromRi, toRi }: { fromRi: number; toRi: number }) {
       if (p >= 1) window.clearInterval(timer);
     }, 30);
     return () => window.clearInterval(timer);
-  }, [fromRi, toRi]);
+  }, [fromRi, toRi, knowledgeBefore, knowledgeAfter]);
   return (
     <div className="flex flex-col items-center gap-0.5">
       <div className="font-[var(--font-geist-mono)] text-5xl font-medium tabular-nums">
@@ -563,10 +586,18 @@ export default function StudyTopicPage({
                   <h2 className="text-3xl">Сессия завершена. Отличная работа!</h2>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <MetricCard label="Эффективность (η)" value={`${(summary?.eta_percent ?? 0).toFixed(1)}%`} />
+                  <MetricCard
+                    label="Эффективность"
+                    value={`${(summary?.eta_percent ?? 0).toFixed(1)}%`}
+                  />
                   <MetricCard
                     label="Изменение уровня знаний"
-                    value={`${(summary?.delta_ri ?? 0) >= 0 ? "+" : ""}${Math.round((summary?.delta_ri ?? 0) / 10)}`}
+                    value={
+                      summary?.delta_knowledge_level != null &&
+                      Number.isFinite(summary.delta_knowledge_level)
+                        ? `${summary.delta_knowledge_level >= 0 ? "+" : ""}${summary.delta_knowledge_level.toFixed(1)}`
+                        : `${(summary?.delta_ri ?? 0) >= 0 ? "+" : ""}${Math.round((summary?.delta_ri ?? 0) / 10)}`
+                    }
                   />
                   <MetricCard
                     label="Точность"
@@ -588,7 +619,12 @@ export default function StudyTopicPage({
                 </p>
                 <div className="rounded-xl border border-neutral-200 bg-white p-8 dark:border-neutral-800 dark:bg-neutral-900">
                   <div className="text-xs uppercase text-neutral-500">Уровень знаний</div>
-                  <SummaryCounter fromRi={summary?.ri_before ?? 0} toRi={summary?.ri_after ?? 0} />
+                  <SummaryCounter
+                    fromRi={summary?.ri_before ?? 0}
+                    toRi={summary?.ri_after ?? 0}
+                    knowledgeBefore={summary?.knowledge_level_before}
+                    knowledgeAfter={summary?.knowledge_level_after}
+                  />
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <button

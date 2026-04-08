@@ -4,7 +4,8 @@ import { knowledgeLevelLabel } from "@/lib/knowledge-level";
 interface ReadinessCardProps {
   ri: number;
   mastery: number;
-  sigma: number;
+  /** Эффективность: (ΣQ)/(N·5)·100 по всем ответам. */
+  efficiency: number;
   /** Дробные часы обучения (из API). */
   hours: number;
 }
@@ -15,7 +16,7 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * 28;
 export default function ReadinessCard({
   ri,
   mastery,
-  sigma,
+  efficiency,
   hours,
 }: ReadinessCardProps) {
   const riClamped = Math.max(0, Math.min(100, ri));
@@ -78,14 +79,14 @@ export default function ReadinessCard({
           </p>
           {[
             {
-              label: "Освоение тем",
+              label: "Освоено",
               value: `${mastery}%`,
               pct: Math.min(100, Math.max(0, mastery)),
             },
             {
-              label: "Стабильность ответов",
-              value: `${sigma}%`,
-              pct: Math.min(100, Math.max(0, sigma)),
+              label: "Эффективность",
+              value: `${Math.round(efficiency)}%`,
+              pct: Math.min(100, Math.max(0, efficiency)),
             },
             {
               label: "Время занятий",
@@ -113,8 +114,10 @@ export default function ReadinessCard({
 
       <div className="mt-auto border-t border-neutral-100 pt-3 dark:border-neutral-800">
         <p className="text-[10px] leading-relaxed break-words text-neutral-400">
-          Балл из 100 учитывает освоение тем, стабильность ответов и время практики
-          — чем выше балл, тем увереннее прогноз на экзамен.
+          Балл из 100 — среднее освоение колод: каждая карточка даёт долю темы, а
+          последняя оценка Q (легко/средне/тяжело) определяет, насколько эта
+          доля «закрыта». Дополнительно учитываются эффективность ответов и
+          время практики.
         </p>
       </div>
     </div>

@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
 import type { CardPayloadItem } from "@/types/learning";
 import {
   createSubject,
@@ -11,6 +13,7 @@ import {
 } from "@/lib/api/content";
 import { getToken } from "@/lib/auth";
 import { validateLatexDelimiters } from "@/lib/latex-validation";
+import { deckTopicFieldsSchema, type DeckTopicFieldsInput } from "@/lib/validations/deck-topic";
 import { AddSubjectModal } from "./AddSubjectModal";
 import { CardSlotEditor } from "./CardSlotEditor";
 
@@ -30,8 +33,6 @@ export function DeckCreateForm() {
   >([]);
   const [subjectId, setSubjectId] = useState<number | "">("");
   const [subjectModalOpen, setSubjectModalOpen] = useState(false);
-  const [topicTitle, setTopicTitle] = useState("");
-  const [topicDesc, setTopicDesc] = useState("");
   const [cards, setCards] = useState<CardPayloadItem[]>([]);
   const [cardErrors, setCardErrors] = useState<
     Record<number, { question?: string; answer?: string }>
@@ -39,6 +40,17 @@ export function DeckCreateForm() {
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [subjectPickInit, setSubjectPickInit] = useState(false);
+
+  const {
+    register: registerTopic,
+    handleSubmit: handleTopicSubmit,
+    formState: { errors: topicErrors },
+  } = useForm<DeckTopicFieldsInput>({
+    resolver: zodResolver(deckTopicFieldsSchema),
+    mode: "onTouched",
+    reValidateMode: "onChange",
+    defaultValues: { topicTitle: "", topicDesc: "" },
+  });
 
   const loadSubjects = useCallback(async () => {
     if (!getToken()) {
@@ -105,7 +117,7 @@ export function DeckCreateForm() {
   const removeSlot = (i: number) =>
     setCards((prev) => prev.filter((_, j) => j !== i));
 
-  const validateAll = (): boolean => {
+  const validateLatexOnly = (): boolean => {
     const err: Record<number, { question?: string; answer?: string }> = {};
     let ok = true;
     cards.forEach((c, i) => {
@@ -120,19 +132,12 @@ export function DeckCreateForm() {
       }
     });
     setCardErrors(err);
-    if (!topicTitle.trim()) {
-      setGeneralError("Укажите название темы");
-      ok = false;
-    } else {
-      setGeneralError(null);
-    }
     return ok;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = handleTopicSubmit(async (topicValues) => {
     setGeneralError(null);
-    if (!validateAll()) return;
+    if (!validateLatexOnly()) return;
 
     const sid =
       subjectId === "" || Number.isNaN(Number(subjectId))
@@ -159,8 +164,10 @@ export function DeckCreateForm() {
     try {
       await saveDeckBatch({
         parent_subject_reference_id: sid,
-        topic_title_name: topicTitle.trim(),
-        topic_description_text: topicDesc.trim() || null,
+        topic_title_name: topicValues.topicTitle,
+        topic_description_text: topicValues.topicDesc
+          ? topicValues.topicDesc
+          : null,
         new_card_payload_collection: filled,
       });
       router.push("/dashboard/topics");
@@ -169,7 +176,7 @@ export function DeckCreateForm() {
     } finally {
       setSaving(false);
     }
-  };
+  });
 
   if (subjectsLoading) {
     return (
@@ -262,25 +269,49 @@ export function DeckCreateForm() {
           </p>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
-              <label className="mb-1 block text-[12px] font-medium text-neutral-700 dark:text-neutral-300">
+              <label
+                htmlFor="topicTitle"
+                className="mb-1 block text-[12px] font-medium text-neutral-700 dark:text-neutral-300"
+              >
                 Название темы
               </label>
               <input
-                value={topicTitle}
-                onChange={(e) => setTopicTitle(e.target.value)}
-                className="h-10 w-full rounded-md border border-neutral-200 px-3 text-[13px] dark:border-neutral-700 dark:bg-neutral-950"
+                id="topicTitle"
+                {...registerTopic("topicTitle")}
+                className={`h-10 w-full rounded-md border px-3 text-[13px] dark:bg-neutral-950 ${
+                  topicErrors.topicTitle
+                    ? "border-red-400 dark:border-red-600"
+                    : "border-neutral-200 dark:border-neutral-700"
+                }`}
                 placeholder="Например: Электростатика"
               />
+              {topicErrors.topicTitle?.message ? (
+                <p className="mt-1 text-[11px] text-red-500">
+                  {topicErrors.topicTitle.message}
+                </p>
+              ) : null}
             </div>
             <div className="md:col-span-2">
-              <label className="mb-1 block text-[12px] font-medium text-neutral-700 dark:text-neutral-300">
+              <label
+                htmlFor="topicDesc"
+                className="mb-1 block text-[12px] font-medium text-neutral-700 dark:text-neutral-300"
+              >
                 Описание темы (необязательно)
               </label>
               <input
-                value={topicDesc}
-                onChange={(e) => setTopicDesc(e.target.value)}
-                className="h-10 w-full rounded-md border border-neutral-200 px-3 text-[13px] dark:border-neutral-700 dark:bg-neutral-950"
+                id="topicDesc"
+                {...registerTopic("topicDesc")}
+                className={`h-10 w-full rounded-md border px-3 text-[13px] dark:bg-neutral-950 ${
+                  topicErrors.topicDesc
+                    ? "border-red-400 dark:border-red-600"
+                    : "border-neutral-200 dark:border-neutral-700"
+                }`}
               />
+              {topicErrors.topicDesc?.message ? (
+                <p className="mt-1 text-[11px] text-red-500">
+                  {topicErrors.topicDesc.message}
+                </p>
+              ) : null}
             </div>
           </div>
         </section>

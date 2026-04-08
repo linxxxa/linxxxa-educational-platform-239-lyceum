@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           errors: {
-            general: data.detail ?? "Неверный email или пароль",
+            general: data.detail ?? "Не удалось выполнить вход",
           },
         },
         { status: res.status === 422 ? 422 : 401 }

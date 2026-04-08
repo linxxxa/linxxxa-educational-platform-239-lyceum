@@ -29,6 +29,14 @@ function mapBackendErrors(
 ): Record<string, string> {
   const msg = extractMessage(detail);
 
+  if (status === 429) {
+    return {
+      general:
+        msg ||
+        "Слишком много попыток регистрации с этого адреса. Попробуйте через час.",
+    };
+  }
+
   if (status === 409 || status === 400) {
     if (msg?.toLowerCase().includes("email")) {
       return { email: "Этот email уже зарегистрирован" };
@@ -76,8 +84,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ errors }, { status: 422 });
     }
 
-    const { login, email, password } = parsed.data;
-    const payload = mapToBackend({ login, email, password });
+    const { login, email, password, deck_share_token } = parsed.data;
+    const payload = {
+      ...mapToBackend({ login, email, password }),
+      ...(deck_share_token?.trim()
+        ? { deck_share_token: deck_share_token.trim() }
+        : {}),
+    };
 
     const registerRes = await fetch(`${API_BASE}/auth/register`, {
       method: "POST",
@@ -87,6 +100,8 @@ export async function POST(req: NextRequest) {
 
     const registerData = (await registerRes.json().catch(() => ({}))) as {
       detail?: unknown;
+      cloned_topic_unique_identifier?: number | null;
+      deck_share_error?: string | null;
     };
 
     if (!registerRes.ok) {
@@ -126,6 +141,9 @@ export async function POST(req: NextRequest) {
       {
         message: "Аккаунт создан",
         access_token: loginData.access_token,
+        cloned_topic_unique_identifier:
+          registerData.cloned_topic_unique_identifier ?? null,
+        deck_share_error: registerData.deck_share_error ?? null,
       },
       { status: 201 }
     );

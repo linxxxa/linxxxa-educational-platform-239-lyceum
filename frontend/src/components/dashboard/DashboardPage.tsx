@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { getToken } from "@/lib/auth";
 import DeckCard from "./DeckCard";
 import type { Deck } from "./DeckCard";
@@ -21,7 +21,7 @@ interface DashboardHomePayload {
   accuracy_week_pct: number;
   total_cards_studied: number;
   mastery_avg_pct: number;
-  sigma_norm_pct: number;
+  learning_efficiency_pct: number;
   hours_learning: number;
   weak_topic_name: string;
   weak_topic_mastery_pct: number;
@@ -36,11 +36,16 @@ function num(x: unknown, fallback = 0): number {
 
 function normalizeDeck(d: unknown): Deck {
   const o = d && typeof d === "object" ? (d as Record<string, unknown>) : {};
+  const mastery = Math.max(0, Math.min(100, Math.round(num(o.mastery, 0))));
+  const ml =
+    typeof o.mastery_label === "string" ? o.mastery_label.trim() : undefined;
   return {
     id: Math.floor(num(o.id, 0)),
     name: typeof o.name === "string" ? o.name : "Без названия",
     connections: Math.max(0, Math.floor(num(o.connections, 0))),
-    mastery: Math.max(0, Math.min(100, Math.round(num(o.mastery, 0)))),
+    mastery,
+    mastery_label: ml !== undefined && ml !== "" ? ml : undefined,
+    show_mastery_zero: o.show_mastery_zero !== false,
   };
 }
 
@@ -98,9 +103,14 @@ function normalizeDashboardPayload(raw: unknown): DashboardHomePayload {
       0,
       Math.min(100, Math.round(num(j.mastery_avg_pct, 0)))
     ),
-    sigma_norm_pct: Math.max(
+    learning_efficiency_pct: Math.max(
       0,
-      Math.min(100, Math.round(num(j.sigma_norm_pct, 0)))
+      Math.min(
+        100,
+        j.learning_efficiency_pct != null && j.learning_efficiency_pct !== ""
+          ? num(j.learning_efficiency_pct, 0)
+          : num(j.sigma_norm_pct, 0)
+      )
     ),
     hours_learning: Math.max(0, num(j.hours_learning, 0)),
     weak_topic_name:
@@ -126,8 +136,16 @@ function PageContent({ children }: { children: React.ReactNode }) {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<DashboardHomePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const shareToken = searchParams.get("shareToken")?.trim();
+    if (shareToken) {
+      router.replace(`/decks/share/${encodeURIComponent(shareToken)}`);
+    }
+  }, [router, searchParams]);
 
   const load = useCallback(async () => {
     const t = getToken();
@@ -160,6 +178,18 @@ export default function DashboardPage() {
     window.addEventListener("edulab-dashboard-refresh", onRefresh);
     return () => window.removeEventListener("edulab-dashboard-refresh", onRefresh);
   }, [load]);
+
+  useEffect(() => {
+    if (!data?.decks?.length) return;
+    const raw = searchParams.get("deckId")?.trim();
+    if (!raw) return;
+    const id = Number(raw);
+    if (!Number.isFinite(id)) return;
+    const hasDeck = data.decks.some((d) => d.id === id);
+    if (!hasDeck) return;
+    const el = document.getElementById(`deck-${id}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [data, searchParams]);
 
   if (!data && !error) {
     return (
@@ -238,7 +268,7 @@ export default function DashboardPage() {
         <ReadinessCard
           ri={riView}
           mastery={data.mastery_avg_pct}
-          sigma={data.sigma_norm_pct}
+          efficiency={data.learning_efficiency_pct}
           hours={data.hours_learning}
         />
         <GrowthZonesCard
@@ -257,7 +287,7 @@ export default function DashboardPage() {
             href="/dashboard/decks"
             className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-700 dark:hover:text-neutral-300"
           >
-            Все темы →
+            Все колоды →
           </Link>
         </div>
         {data.decks.length === 0 ? (

@@ -146,8 +146,13 @@ export async function shareDeckByEmail(
   email: string
 ): Promise<{
   message: string;
-  topic_unique_identifier: number;
-  cards_copied_count: number;
+  share_url: string;
+  recipient_registered: boolean;
+  links?: {
+    universal: string;
+    registered_user_dashboard: string;
+    new_user_register: string;
+  };
 }> {
   const res = await fetch(`/api/decks/${deckId}/share`, {
     method: "POST",
@@ -162,7 +167,12 @@ export async function shareDeckByEmail(
   }
   return res.json() as Promise<{
     message: string;
-    topic_unique_identifier: number;
-    cards_copied_count: number;
+    share_url: string;
+    recipient_registered: boolean;
+    links?: {
+      universal: string;
+      registered_user_dashboard: string;
+      new_user_register: string;
+    };
   }>;
 }
