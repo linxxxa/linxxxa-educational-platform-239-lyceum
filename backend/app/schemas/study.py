@@ -33,6 +33,14 @@ class UserAnswerSubmission(BaseModel):
     user_answer: str | None = None
     current_session_energy: float | None = None
 
+    answer_mode: Literal["classic", "matching"] | None = None
+    explicit_quality_q: int | None = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="Для matching: явное Q (1–5); иначе считается из confidence.",
+    )
+
     @field_validator("user_subjective_confidence_score")
     @classmethod
     def validate_confidence_in_range(cls, value: float) -> float:
@@ -90,8 +98,13 @@ class MatchingBatchResultItem(BaseModel):
         ...,
         validation_alias=AliasChoices("card_id", "target_card_unique_identifier"),
     )
-    q_value: int = Field(..., ge=1, le=5)
-    mode: Literal["matching"] = "matching"
+    q_value: int = Field(
+        ...,
+        ge=1,
+        le=5,
+        validation_alias=AliasChoices("q_value", "q"),
+    )
+    mode: Literal["matching", "match"] = "matching"
 
 
 class MatchingBatchRequest(BaseModel):

@@ -1271,8 +1271,25 @@ def matching_batch_update_endpoint(
     if topic is None or int(topic.topic_owner_user_id or 0) != uid:
         raise HTTPException(status_code=404, detail="Тема не найдена")
 
+    topic_row_pre = database_connection_session.get(
+        LearningTopicModel, int(body.topic_id)
+    )
+    knowledge_before = float(
+        (topic_row_pre.topic_knowledge_level_0_100 or 0.0)
+        if topic_row_pre is not None
+        else 0.0
+    )
+
     if not body.results:
-        return {"ok": True, "processed": 0, "energy_left": None}
+        return {
+            "ok": True,
+            "processed": 0,
+            "energy_left": None,
+            "topic_knowledge_before": knowledge_before,
+            "topic_knowledge_after": knowledge_before,
+            "delta_knowledge_level": 0.0,
+            "learning_efficiency_pct": None,
+        }
 
     n = len(body.results)
     total_ms = body.total_response_time_ms
@@ -1314,12 +1331,34 @@ def matching_batch_update_endpoint(
         if float(last_result.get("energy_left", 1.0)) <= 0.0:
             break
 
+    sync_all_topic_knowledge_levels_for_user(database_connection_session, uid)
+    database_connection_session.flush()
+    topic_row_post = database_connection_session.get(
+        LearningTopicModel, int(body.topic_id)
+    )
+    knowledge_after = float(
+        (topic_row_post.topic_knowledge_level_0_100 or 0.0)
+        if topic_row_post is not None
+        else 0.0
+    )
+    delta_kl = round(knowledge_after - knowledge_before, 2)
+    learning_efficiency_pct = (
+        float(last_result.get("learning_efficiency_pct"))
+        if last_result is not None
+        and last_result.get("learning_efficiency_pct") is not None
+        else None
+    )
+
     return {
         "ok": True,
         "processed": processed,
         "energy_left": float(last_result.get("energy_left", 0.0))
         if last_result
         else None,
+        "topic_knowledge_before": knowledge_before,
+        "topic_knowledge_after": knowledge_after,
+        "delta_knowledge_level": delta_kl,
+        "learning_efficiency_pct": learning_efficiency_pct,
     }
 
 
