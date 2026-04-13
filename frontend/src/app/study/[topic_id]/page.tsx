@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import confetti from "canvas-confetti";
+import { playFullscreenConfetti } from "@/lib/playFullscreenConfetti";
 import { fetchTopics } from "@/lib/api/content";
 import { getToken } from "@/lib/auth";
 import { answerRedundantWithQuestion, sameCardText } from "@/lib/card-text";
@@ -43,6 +43,8 @@ interface SessionState {
   cards_done: number;
   cards_total: number;
 }
+
+type SessionSummarySnapshot = Pick<SessionState, "cards_done" | "cards_total">;
 
 interface ProcessAnswerResponse {
   session_completed?: boolean;
@@ -267,7 +269,22 @@ export default function StudyTopicPage({
   }, [session]);
 
   useEffect(() => {
-    params.then((p) => setTopicId(p.topic_id));
+    if (typeof window !== "undefined") {
+      const pathMatch = window.location.pathname.match(/^\/study\/([^/?#]+)/);
+      const fromPath = pathMatch?.[1] ? String(pathMatch[1]).trim() : "";
+      if (fromPath) {
+        setTopicId((previous) => (previous ? previous : fromPath));
+      }
+    }
+    let cancelled = false;
+    void params.then((routeParams) => {
+      if (cancelled) return;
+      const nextId = String(routeParams.topic_id ?? "").trim();
+      if (nextId) setTopicId(nextId);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [params]);
 
   useEffect(() => {
@@ -276,61 +293,155 @@ export default function StudyTopicPage({
     return () => window.clearTimeout(t);
   }, [fastTrackPinned]);
 
+  const finishSession = useCallback(
+    async (sessionSummaryOverride?: SessionSummarySnapshot) => {
+      if (summaryLoaded) return;
+      if (!getToken()) {
+        router.replace("/login");
+        return;
+      }
+      const ref = sessionRef.current;
+      const cards_done =
+        sessionSummaryOverride?.cards_done ?? ref.cards_done;
+      const cards_total =
+        sessionSummaryOverride?.cards_total ?? ref.cards_total;
+      const interactions = sessionInteractionsRef.current;
+      const body: Record<string, unknown> = {
+        started_at_ts:
+          sessionStartedAtRef.current ?? Date.now() / 1000,
+        session_summary: {
+          cards_done,
+          cards_total,
+        },
+      };
+      if (sessionRiBeforeRef.current != null) {
+        body.ri_before_snapshot = sessionRiBeforeRef.current;
+      }
+      if (interactions.length > 0) {
+        body.interactions = interactions.map((x) => ({
+          is_correct: Boolean(x.is_correct),
+          response_time_ms: Math.round(x.response_time_ms),
+          topic_id: x.topic_id,
+        }));
+      }
+
+      let finishRequestSucceeded = false;
+      try {
+        const res = await fetch("/api/session/finish", {
+          method: "POST",
+          headers: {
+            ...authHeaders(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        finishRequestSucceeded = res.ok;
+        if (res.ok) {
+          const rawText = await res.text();
+          let data = {} as SessionFinishSummary;
+          if (rawText.trim()) {
+            try {
+              data = JSON.parse(rawText) as SessionFinishSummary;
+            } catch {
+              data = {} as SessionFinishSummary;
+            }
+          }
+          setSummary(data);
+          setEnergy(Math.max(0, Math.round(data.energy_left ?? energy)));
+          window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
+        }
+      } catch {
+        finishRequestSucceeded = false;
+      } finally {
+        setSummaryLoaded(true);
+      }
+      window.setTimeout(() => {
+        playFullscreenConfetti(
+          finishRequestSucceeded ? "celebration" : "subtle"
+        );
+      }, finishRequestSucceeded ? 200 : 0);
+    },
+    [summaryLoaded, energy, router]
+  );
+
   const loadNextCard = useCallback(async (excludeIds: number[] = []) => {
     if (!topicId) return;
     setLoading(true);
-    if (!getToken()) {
-      router.replace("/login");
-      return;
-    }
-    const url = new URL(
-      `/api/study/topic/${topicId}/next-card`,
-      window.location.origin
-    );
-    if (excludeIds.length > 0) {
-      url.searchParams.set("exclude_card_ids", excludeIds.join(","));
-    }
-    const res = await fetch(url.toString(), { headers: authHeaders() });
-    if (res.status === 401) {
-      router.replace("/login");
-      return;
-    }
-    const data = (await res.json()) as { finished?: boolean; card?: StudyCard | null; session?: SessionState | null };
-    if (data.finished) {
-      setStage("FINISHED");
+    try {
+      if (!getToken()) {
+        router.replace("/login");
+        return;
+      }
+      const url = new URL(
+        `/api/study/topic/${topicId}/next-card`,
+        window.location.origin
+      );
+      if (excludeIds.length > 0) {
+        url.searchParams.set("exclude_card_ids", excludeIds.join(","));
+      }
+      const res = await fetch(url.toString(), { headers: authHeaders() });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        finished?: boolean;
+        card?: StudyCard | null;
+        session?: SessionState | null;
+      };
+      if (data.finished) {
+        if (data.session) {
+          setSession(data.session);
+          setEnergy(data.session.energy);
+        }
+        await finishSession(
+          data.session
+            ? {
+                cards_done: data.session.cards_done,
+                cards_total: data.session.cards_total,
+              }
+            : undefined
+        );
+        setStage("FINISHED");
+        return;
+      }
+      if (!data.card) {
+        setCard(null);
+        if (data.session) {
+          setSession(data.session);
+          setEnergy(data.session.energy);
+        }
+        await finishSession(
+          data.session
+            ? {
+                cards_done: data.session.cards_done,
+                cards_total: data.session.cards_total,
+              }
+            : undefined
+        );
+        setStage("FINISHED");
+        return;
+      }
+      setCard(data.card);
+      setAnswerInput("");
+      setSubmittedAnswer("");
+      setShowExplanation(false);
+      setStage("QUESTION");
+      startTimeRef.current = null;
+      responseTimeMsRef.current = null;
       if (data.session) {
         setSession(data.session);
         setEnergy(data.session.energy);
       }
+    } finally {
       setLoading(false);
-      return;
     }
-    if (!data.card) {
-      setCard(null);
-      setStage("FINISHED");
-      if (data.session) {
-        setSession(data.session);
-        setEnergy(data.session.energy);
-      }
-      setLoading(false);
-      return;
-    }
-    setCard(data.card);
-    setAnswerInput("");
-    setSubmittedAnswer("");
-    setShowExplanation(false);
-    setStage("QUESTION");
-    startTimeRef.current = null;
-    responseTimeMsRef.current = null;
-    if (data.session) {
-      setSession(data.session);
-      setEnergy(data.session.energy);
-    }
-    setLoading(false);
-  }, [topicId, router]);
+  }, [topicId, router, finishSession]);
 
   const startSession = useCallback(async () => {
     if (!topicId) return;
+    setSummary(null);
+    setSummaryLoaded(false);
     sessionStartedAtRef.current = Date.now() / 1000;
     setSeenCardIds([]);
     sessionInteractionsRef.current = [];
@@ -358,55 +469,6 @@ export default function StudyTopicPage({
     } catch {}
     await loadNextCard([]);
   }, [topicId, loadNextCard, router]);
-
-  const finishSession = useCallback(async () => {
-    if (summaryLoaded) return;
-    if (!getToken()) {
-      router.replace("/login");
-      return;
-    }
-    const interactions = sessionInteractionsRef.current;
-    const body: Record<string, unknown> = {
-      started_at_ts:
-        sessionStartedAtRef.current ?? Date.now() / 1000,
-      session_summary: {
-        cards_done: sessionRef.current.cards_done,
-        cards_total: sessionRef.current.cards_total,
-      },
-    };
-    if (sessionRiBeforeRef.current != null) {
-      body.ri_before_snapshot = sessionRiBeforeRef.current;
-    }
-    if (interactions.length > 0) {
-      body.interactions = interactions.map((x) => ({
-        is_correct: Boolean(x.is_correct),
-        response_time_ms: Math.round(x.response_time_ms),
-        topic_id: x.topic_id,
-      }));
-    }
-
-    const res = await fetch("/api/session/finish", {
-      method: "POST",
-      headers: {
-        ...authHeaders(),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as SessionFinishSummary;
-      setSummary(data);
-      setEnergy(Math.max(0, Math.round(data.energy_left ?? energy)));
-      window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
-    }
-    setSummaryLoaded(true);
-    confetti({
-      particleCount: 80,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ["#262626", "#737373", "#A3A3A3", "#E5E5E5"],
-    });
-  }, [summaryLoaded, energy, router]);
 
   if (!isMatchMode && topicId && startedForTopicRef.current !== topicId) {
     startedForTopicRef.current = topicId;
@@ -445,10 +507,17 @@ export default function StudyTopicPage({
         responseTimeMsRef.current ?? 1
       );
 
-      // Optimistic header progress: update bar immediately after choosing Q.
-      setSession((prev) =>
-        prev ? { ...prev, cards_done: prev.cards_done + 1 } : prev
-      );
+      // Optimistic header progress + снимок для POST /finish (ref может отстать на один кадр).
+      let sessionSnapshotForFinish: SessionSummarySnapshot | undefined;
+      setSession((prev) => {
+        if (!prev) return prev;
+        const nextDone = prev.cards_done + 1;
+        sessionSnapshotForFinish = {
+          cards_done: nextDone,
+          cards_total: prev.cards_total,
+        };
+        return { ...prev, cards_done: nextDone };
+      });
       setSeenCardIds((prev) =>
         prev.includes(card.card_id) ? prev : [...prev, card.card_id]
       );
@@ -486,7 +555,7 @@ export default function StudyTopicPage({
 
       if (data.session_completed || nextEnergy < 10) {
         setShowBreakHint(Boolean(data.suggest_break));
-        await finishSession();
+        await finishSession(sessionSnapshotForFinish);
         setStage("FINISHED");
         return;
       }

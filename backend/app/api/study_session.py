@@ -1267,18 +1267,13 @@ def matching_batch_update_endpoint(
     в pipeline ответа с mode=matching и коэффициентом мастерства 0.7.
     """
     uid = int(authorized_student_user_account.user_unique_identifier)
-    topic = database_connection_session.get(LearningTopicModel, int(body.topic_id))
-    if topic is None or int(topic.topic_owner_user_id or 0) != uid:
-        raise HTTPException(status_code=404, detail="Тема не найдена")
-
     topic_row_pre = database_connection_session.get(
         LearningTopicModel, int(body.topic_id)
     )
-    knowledge_before = float(
-        (topic_row_pre.topic_knowledge_level_0_100 or 0.0)
-        if topic_row_pre is not None
-        else 0.0
-    )
+    if topic_row_pre is None or int(topic_row_pre.topic_owner_user_id or 0) != uid:
+        raise HTTPException(status_code=404, detail="Тема не найдена")
+
+    knowledge_before = float(topic_row_pre.topic_knowledge_level_0_100 or 0.0)
 
     if not body.results:
         return {

@@ -2,9 +2,10 @@ import { getToken } from "@/lib/auth";
 
 export const MATCHING_PENDING_STORAGE_KEY = "edulab_matching_pending_v1";
 
+/** Элемент batch для POST /study/matching-batch-update (алиас `q` → q_value на бэкенде). */
 export type MatchingBatchItem = {
   card_id: number;
-  q_value: number;
+  q: number;
   mode: "matching";
 };
 
@@ -46,6 +47,30 @@ export function clearMatchingPending() {
   } catch {
     /* ignore */
   }
+}
+
+/** Приводит элементы из localStorage (q или q_value) к формату для API. */
+export function coerceMatchingBatchResultsForApi(
+  rawResults: Array<{
+    card_id: number;
+    q?: number;
+    q_value?: number;
+    mode?: string;
+  }>
+): MatchingBatchItem[] {
+  return rawResults.map((row) => {
+    const explicitQ =
+      typeof row.q === "number" && Number.isFinite(row.q)
+        ? row.q
+        : typeof row.q_value === "number" && Number.isFinite(row.q_value)
+          ? row.q_value
+          : 3;
+    return {
+      card_id: row.card_id,
+      q: explicitQ,
+      mode: "matching",
+    };
+  });
 }
 
 export async function postMatchingBatch(

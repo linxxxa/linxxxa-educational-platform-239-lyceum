@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { getToken } from "@/lib/auth";
 import {
   clearMatchingPending,
+  coerceMatchingBatchResultsForApi,
   loadMatchingPending,
   postMatchingBatch,
 } from "@/lib/matching-batch-sync";
@@ -28,7 +29,14 @@ export function PendingMatchingSync() {
         const res = await postMatchingBatch({
           topic_id: pending.topic_id,
           session_id: pending.session_id,
-          results: pending.results,
+          results: coerceMatchingBatchResultsForApi(
+            pending.results as {
+              card_id: number;
+              q?: number;
+              q_value?: number;
+              mode?: string;
+            }[]
+          ),
           total_response_time_ms: pending.total_response_time_ms,
         });
         if (!res.ok) throw new Error(String(res.status));

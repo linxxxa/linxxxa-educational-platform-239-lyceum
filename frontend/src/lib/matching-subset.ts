@@ -2,13 +2,22 @@ import type { TopicCardListItem } from "@/lib/api/content";
 
 export type PairCountOption = 5 | 10 | 15 | "all";
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+export function shuffle<T>(arr: T[]): T[] {
+  const mutableCopy = [...arr];
+  for (
+    let reverseWalkIndex = mutableCopy.length - 1;
+    reverseWalkIndex > 0;
+    reverseWalkIndex -= 1
+  ) {
+    const randomSwapPartnerIndex = Math.floor(
+      Math.random() * (reverseWalkIndex + 1)
+    );
+    const tempItem = mutableCopy[reverseWalkIndex];
+    mutableCopy[reverseWalkIndex] =
+      mutableCopy[randomSwapPartnerIndex];
+    mutableCopy[randomSwapPartnerIndex] = tempItem;
   }
-  return a;
+  return mutableCopy;
 }
 
 /**
@@ -22,7 +31,9 @@ export function getShuffledSubset(
   if (deck.length === 0) return [];
   const cap = count === "all" ? deck.length : Math.min(count, deck.length);
   const sorted = [...deck].sort(
-    (a, b) => (a.mastery_level ?? 0) - (b.mastery_level ?? 0)
+    (leftTopicCard, rightTopicCard) =>
+      (leftTopicCard.mastery_level ?? 0) -
+      (rightTopicCard.mastery_level ?? 0)
   );
   const weakest = sorted.slice(0, cap);
   return shuffle(weakest);

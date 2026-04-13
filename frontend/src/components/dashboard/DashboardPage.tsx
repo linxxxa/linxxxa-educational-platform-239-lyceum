@@ -149,13 +149,6 @@ export default function DashboardPage() {
     }
   }, [router, searchParams]);
 
-  useEffect(() => {
-    const r = searchParams.get("refresh");
-    if (r !== "1" && r !== "progress") return;
-    window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
-    router.replace("/dashboard", { scroll: false });
-  }, [router, searchParams]);
-
   const load = useCallback(async () => {
     const t = getToken();
     if (!t) {
@@ -177,6 +170,14 @@ export default function DashboardPage() {
     const json: unknown = await res.json();
     setData(normalizeDashboardPayload(json));
   }, [router]);
+
+  useEffect(() => {
+    const r = searchParams.get("refresh");
+    if (r !== "1" && r !== "progress") return;
+    void load();
+    window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
+    router.replace("/dashboard", { scroll: false });
+  }, [router, searchParams, load]);
 
   if (!didLoadRef.current) {
     didLoadRef.current = true;
