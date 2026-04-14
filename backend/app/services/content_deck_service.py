@@ -16,6 +16,7 @@ from app.models.learning_subject import LearningSubjectModel
 from app.models.learning_topic import LearningTopicModel
 from app.models.user_account import UserAccountModel
 from app.schemas.content import CardPayloadItem
+from app.services.email_delivery import try_send_html_email
 from app.services.user_analytics_service import recalculate_topic_knowledge_level_for_owner
 
 logger = logging.getLogger(__name__)
@@ -453,7 +454,7 @@ def create_deck_share_invite_and_send_email(
 ) -> dict:
     """
     Создаёт токен приглашения (без мгновенного клонирования).
-    В письме — умные ссылки (дашборд / регистрация / универсальная).
+    Письмо с HTML и ссылками отправляется через SMTP, если задан SMTP_HOST.
     """
     recipient_email_normalized = _normalize_email_for_share(recipient_email_raw)
     topic = database_session_instance.get(
@@ -527,10 +528,29 @@ def create_deck_share_invite_and_send_email(
     )
     logger.debug("[deck-share] email html (preview): %s", html[:500])
 
+    topic_title = topic.topic_display_name or "Колода"
+    plain = (
+        f"Вам передали колоду «{topic_title}» в EduLab.\n\n"
+        f"Откройте ссылку, чтобы забрать колоду:\n{universal}\n\n"
+        f"Если вы уже зарегистрированы: {registered_deep}\n"
+        f"Если нет — регистрация: {new_user_link}\n"
+    )
+    email_sent = try_send_html_email(
+        to_address=recipient_email_normalized,
+        subject=f"Вам передали колоду: {topic_title}",
+        html_body=html,
+        text_body=plain,
+    )
+
     return {
-        "message": "Ссылка для получения колоды сформирована",
+        "message": (
+            "Приглашение отправлено на почту"
+            if email_sent
+            else "Ссылка для получения колоды сформирована (письмо не отправлено — проверьте SMTP на сервере)"
+        ),
         "share_token": token_str,
         "share_url": universal,
+        "email_sent": email_sent,
         "links": {
             "universal": universal,
             "registered_user_dashboard": registered_deep,

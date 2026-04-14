@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { backendProxyHeaders } from "@/lib/backend-proxy-headers";
 import { loginSchema } from "@/lib/validations/login";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -15,6 +16,10 @@ export async function POST(req: NextRequest) {
       for (const [key, msgs] of Object.entries(flattened.fieldErrors ?? {})) {
         if (Array.isArray(msgs) && msgs[0]) errors[key] = msgs[0];
       }
+      const rootMsgs = flattened.formErrors?.filter(Boolean) ?? [];
+      if (rootMsgs.length > 0 && !errors.general) {
+        errors.general = rootMsgs.join(" ");
+      }
       return NextResponse.json({ errors }, { status: 422 });
     }
 
@@ -25,7 +30,10 @@ export async function POST(req: NextRequest) {
 
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...backendProxyHeaders(req),
+      },
       body: formData.toString(),
     });
 

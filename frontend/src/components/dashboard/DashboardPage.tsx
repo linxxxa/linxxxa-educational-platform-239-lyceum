@@ -141,6 +141,16 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardHomePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const didLoadRef = useRef(false);
+  const mountedRef = useRef(false);
+  const activeRequestAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeRequestAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     const shareToken = searchParams.get("shareToken")?.trim();
@@ -155,20 +165,36 @@ export default function DashboardPage() {
       router.replace("/login");
       return;
     }
-    setError(null);
-    const res = await fetch("/api/study/dashboard-home", {
-      headers: { Authorization: `Bearer ${t}` },
-    });
+    if (mountedRef.current) setError(null);
+
+    activeRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    activeRequestAbortRef.current = controller;
+
+    let res: Response;
+    try {
+      res = await fetch("/api/study/dashboard-home", {
+        headers: { Authorization: `Bearer ${t}` },
+        signal: controller.signal,
+      });
+    } catch (e) {
+      // Abort on route change/unmount should be silent.
+      if (controller.signal.aborted) return;
+      if (mountedRef.current) {
+        setError("Не удалось загрузить дашборд");
+      }
+      return;
+    }
     if (res.status === 401) {
       router.replace("/login");
       return;
     }
     if (!res.ok) {
-      setError("Не удалось загрузить дашборд");
+      if (mountedRef.current) setError("Не удалось загрузить дашборд");
       return;
     }
     const json: unknown = await res.json();
-    setData(normalizeDashboardPayload(json));
+    if (mountedRef.current) setData(normalizeDashboardPayload(json));
   }, [router]);
 
   useEffect(() => {
@@ -179,10 +205,11 @@ export default function DashboardPage() {
     router.replace("/dashboard", { scroll: false });
   }, [router, searchParams, load]);
 
-  if (!didLoadRef.current) {
+  useEffect(() => {
+    if (didLoadRef.current) return;
     didLoadRef.current = true;
     void load();
-  }
+  }, [load]);
 
   useEffect(() => {
     const onRefresh = () => void load();

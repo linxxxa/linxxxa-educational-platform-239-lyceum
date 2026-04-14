@@ -255,7 +255,7 @@ def share_topic_deck_clone_by_email_endpoint(
     database_connection_session: Session = Depends(get_database_session_generator),
     authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
 ):
-    """Создаёт приглашение и отправляет письмо со ссылками (без мгновенного клонирования)."""
+    """Создаёт приглашение; письмо уходит по SMTP, если задан SMTP_HOST (см. .env.example)."""
     _ = request  # slowapi / rate limit
     return create_deck_share_invite_and_send_email(
         database_connection_session,

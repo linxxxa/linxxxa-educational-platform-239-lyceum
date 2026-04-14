@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { backendProxyHeaders } from "@/lib/backend-proxy-headers";
 import { registerSchema } from "@/lib/validations/register";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -81,6 +82,10 @@ export async function POST(req: NextRequest) {
       for (const [key, msgs] of Object.entries(flattened.fieldErrors ?? {})) {
         if (Array.isArray(msgs) && msgs[0]) errors[key] = msgs[0];
       }
+      const rootMsgs = flattened.formErrors?.filter(Boolean) ?? [];
+      if (rootMsgs.length > 0 && !errors.general) {
+        errors.general = rootMsgs.join(" ");
+      }
       return NextResponse.json({ errors }, { status: 422 });
     }
 
@@ -94,7 +99,10 @@ export async function POST(req: NextRequest) {
 
     const registerRes = await fetch(`${API_BASE}/auth/register`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...backendProxyHeaders(req),
+      },
       body: JSON.stringify(payload),
     });
 
@@ -115,7 +123,10 @@ export async function POST(req: NextRequest) {
 
     const loginRes = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...backendProxyHeaders(req),
+      },
       body: new URLSearchParams({
         username: email.toLowerCase().trim(),
         password,

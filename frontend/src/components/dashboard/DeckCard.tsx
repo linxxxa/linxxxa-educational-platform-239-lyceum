@@ -65,6 +65,7 @@ export default function DeckCard({ deck }: DeckCardProps) {
     : "Сопоставление";
   const [shareOpen, setShareOpen] = useState(false);
   const [shareOk, setShareOk] = useState<string | null>(null);
+  const [shareUrlFallback, setShareUrlFallback] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [throttleMsg, setThrottleMsg] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -122,14 +123,23 @@ export default function DeckCard({ deck }: DeckCardProps) {
     }
     lastShareAtRef.current = now;
     setShareOk(null);
+    setShareUrlFallback(null);
     setShareLoading(true);
     try {
       const r = await shareDeckByEmail(deck.id, values.email.trim());
-      setShareOk(
-        r.recipient_registered
-          ? "Письмо отправлено: получатель получит ссылку, чтобы забрать колоду в один клик."
-          : "Письмо отправлено: в нём ссылка на регистрацию и получение колоды."
-      );
+      const sent = r.email_sent === true;
+      setShareUrlFallback(sent ? null : r.share_url);
+      if (sent) {
+        setShareOk(
+          r.recipient_registered
+            ? "Письмо отправлено: получатель получит ссылку, чтобы забрать колоду в один клик."
+            : "Письмо отправлено: в нём ссылка на регистрацию и получение колоды."
+        );
+      } else {
+        setShareOk(
+          "Приглашение создано, но письмо не ушло: на сервере не настроена почта (SMTP) или отправка сорвалась. Скопируйте ссылку ниже и отправьте другу вручную."
+        );
+      }
       reset({ email: "" });
     } catch (e) {
       setThrottleMsg(e instanceof Error ? e.message : "Ошибка отправки");
@@ -154,6 +164,7 @@ export default function DeckCard({ deck }: DeckCardProps) {
           onClick={() => {
             setShareOpen(true);
             setShareOk(null);
+            setShareUrlFallback(null);
             setThrottleMsg(null);
             reset({ email: "" });
           }}
@@ -302,9 +313,30 @@ export default function DeckCard({ deck }: DeckCardProps) {
                 </p>
               ) : null}
               {shareOk ? (
-                <p className="mb-3 text-[12px] text-emerald-600 dark:text-emerald-400">
+                <p
+                  className={`mb-3 text-[12px] ${
+                    shareUrlFallback
+                      ? "text-amber-800 dark:text-amber-200"
+                      : "text-emerald-600 dark:text-emerald-400"
+                  }`}
+                >
                   {shareOk}
                 </p>
+              ) : null}
+              {shareUrlFallback ? (
+                <div className="mb-3 rounded-md border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-900">
+                  <p className="mb-1 text-[11px] text-neutral-500">Ссылка-приглашение</p>
+                  <p className="break-all font-mono text-[11px] text-neutral-800 dark:text-neutral-200">
+                    {shareUrlFallback}
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-2 text-[11px] font-medium text-neutral-700 underline dark:text-neutral-300"
+                    onClick={() => void navigator.clipboard.writeText(shareUrlFallback)}
+                  >
+                    Скопировать
+                  </button>
+                </div>
               ) : null}
               <div className="mt-3 flex justify-end gap-2">
                 <button

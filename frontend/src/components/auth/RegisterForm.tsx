@@ -6,9 +6,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useForm, type UseFormRegisterReturn } from "react-hook-form";
 import { saveToken } from "@/lib/auth";
-import { registerSchema, type RegisterInput } from "@/lib/validations/register";
+import {
+  registerFormSchema,
+  type RegisterFormInput,
+} from "@/lib/validations/register";
 
-type RegisterFormValues = Omit<RegisterInput, "deck_share_token">;
+type RegisterFormValues = RegisterFormInput;
 
 interface ServerFieldErrors {
   login?: string;
@@ -35,7 +38,7 @@ export default function RegisterForm() {
     setError,
     formState: { errors, isSubmitting },
   } = useForm<RegisterFormValues>({
-    resolver: zodResolver(registerSchema.omit({ deck_share_token: true })),
+    resolver: zodResolver(registerFormSchema),
     mode: "onTouched",
     reValidateMode: "onChange",
     defaultValues: {

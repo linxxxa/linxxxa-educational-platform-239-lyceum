@@ -186,6 +186,8 @@ export async function shareDeckByEmail(
   message: string;
   share_url: string;
   recipient_registered: boolean;
+  /** false, если на бэкенде не настроен SMTP или отправка не удалась */
+  email_sent?: boolean;
   links?: {
     universal: string;
     registered_user_dashboard: string;
@@ -207,6 +209,7 @@ export async function shareDeckByEmail(
     message: string;
     share_url: string;
     recipient_registered: boolean;
+    email_sent?: boolean;
     links?: {
       universal: string;
       registered_user_dashboard: string;
