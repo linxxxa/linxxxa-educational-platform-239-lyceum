@@ -80,7 +80,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
         {/* Центральные ссылки (десктоп) */}
         <nav className="hidden items-center gap-6 md:flex">
           <Link
-            href="#about"
+            href="/"
             className="text-[13px] text-neutral-500 transition-colors duration-150 hover:text-neutral-900 dark:hover:text-neutral-100"
           >
             О платформе
@@ -183,7 +183,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
           className={`flex flex-col gap-3 border-b border-neutral-200 bg-white pb-4 dark:border-neutral-200 dark:bg-white md:hidden animate-menu-fade-in ${headerInnerPad}`}
         >
           <Link
-            href="#about"
+            href="/"
             onClick={() => setMenuOpen(false)}
             className="py-1 text-[13px] text-neutral-500"
           >

@@ -25,7 +25,7 @@ export function HeroSection() {
               Продолжить учёбу →
             </Link>
             <Link
-              href="#about"
+              href="/"
               className="rounded-lg border border-zinc-300 px-6 py-3 text-base font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/50"
             >
               О платформе
