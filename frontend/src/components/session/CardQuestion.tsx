@@ -31,23 +31,23 @@ export default function CardQuestion({ card, onShowAnswer }: Props) {
       {formulaAnswerRedundant ? (
         sameCardText(card.question_text, card.answer_text) ? (
           <div className="mb-6 rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-700 dark:bg-neutral-800">
-            <FormulaBlock latex={card.answer_text} />
+            <FormulaBlock latex={card.question_text || card.answer_text} />
           </div>
         ) : (
-          <p className="mb-6 break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+          <p className="mb-6 whitespace-pre-wrap break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
             {card.question_text}
           </p>
         )
       ) : (
         <>
-          <p className="mb-6 break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
-            {card.question_text}
-          </p>
-
-          {card.card_type === "формула" && (
+          {card.card_type === "формула" && card.question_text.includes("$$") ? (
             <div className="mb-6 rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-700 dark:bg-neutral-800">
-              <FormulaBlock latex={card.answer_text} />
+              <FormulaBlock latex={card.question_text} />
             </div>
+          ) : (
+            <p className="mb-6 whitespace-pre-wrap break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+              {card.question_text}
+            </p>
           )}
         </>
       )}

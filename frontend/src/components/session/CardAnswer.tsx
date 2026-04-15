@@ -24,14 +24,14 @@ export default function CardAnswer({ card, onConfidence }: Props) {
       </div>
 
       {singleBlock ? (
-        <p className="mb-7 break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+        <p className="mb-7 whitespace-pre-wrap break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
           {sameCardText(card.question_text, card.answer_text)
             ? card.answer_text
             : card.question_text}
         </p>
       ) : (
         <>
-          <p className="mb-5 break-words text-[15px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+          <p className="mb-5 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-neutral-400 dark:text-neutral-500">
             {card.question_text}
           </p>
 
@@ -41,7 +41,7 @@ export default function CardAnswer({ card, onConfidence }: Props) {
             <div className="h-px flex-1 bg-neutral-200 dark:bg-neutral-700" />
           </div>
 
-          <p className="mb-7 break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+          <p className="mb-7 whitespace-pre-wrap break-words text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
             {card.answer_text}
           </p>
         </>

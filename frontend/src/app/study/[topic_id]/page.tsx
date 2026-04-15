@@ -151,7 +151,7 @@ function renderAnswerMaybeLatex(text: string, className: string) {
       </div>
     );
   }
-  return <p className={className}>{text}</p>;
+  return <p className={`whitespace-pre-wrap break-words ${className}`}>{text}</p>;
 }
 
 /** Компактный выход из сессии (без полосы прогресса и энергии). */
@@ -848,7 +848,7 @@ export default function StudyTopicPage({
                             {showExplanation ? "Скрыть объяснение" : "Показать объяснение"}
                           </button>
                           {showExplanation && (
-                            <div className="mt-3 rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 text-sm dark:border-[#27272A] dark:bg-[#09090B]">
+                            <div className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 text-sm dark:border-[#27272A] dark:bg-[#09090B]">
                               {card.explanation_text?.trim() || "Подробное объяснение будет добавлено позже."}
                             </div>
                           )}
