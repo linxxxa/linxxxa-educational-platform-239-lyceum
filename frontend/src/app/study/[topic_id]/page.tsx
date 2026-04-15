@@ -123,10 +123,11 @@ function answerAlreadyInQuestionBody(card: StudyCard): boolean {
 }
 
 function renderLatexBlock(content: string) {
-  const clean = content.replace(/\$\$/g, "").trim();
+  const withoutDelimiters = content.replace(/\$\$/g, "");
+  const math = withoutDelimiters.length > 0 ? withoutDelimiters : content;
   return (
-    <div className="min-w-0 max-w-full text-center leading-[1.6]">
-      <BlockMath math={clean || content} />
+    <div className="min-w-0 max-w-full whitespace-pre-wrap break-words text-center leading-[1.6]">
+      <BlockMath math={math} />
     </div>
   );
 }
@@ -136,10 +137,12 @@ function renderAnswerMaybeLatex(text: string, className: string) {
   const t = text.trim();
   if (!t) return <span className="text-neutral-500">—</span>;
   if (t.includes("$$")) {
-    const clean = t.replace(/\$\$/g, "").trim();
+    const raw = text;
+    const clean = raw.replace(/\$\$/g, "");
+    const math = clean.length > 0 ? clean : raw;
     return (
-      <div className={`overflow-x-auto overflow-y-hidden ${className}`}>
-        <BlockMath math={clean || t} />
+      <div className={`overflow-x-auto overflow-y-hidden whitespace-pre-wrap ${className}`}>
+        <BlockMath math={math} />
       </div>
     );
   }
@@ -833,14 +836,12 @@ export default function StudyTopicPage({
                                 "text-sm text-neutral-500 line-through"
                               )}
                             </div>
-                            {!answerAlreadyInQuestionBody(card) && (
-                              <div className="rounded-lg border border-[#E4E4E7] bg-[#F7F7F7] px-3 py-2 font-semibold text-neutral-900 shadow-[0_0_15px_rgba(34,197,94,0.1)] dark:border-[#27272A] dark:bg-[#121214] dark:text-neutral-100">
-                                <div className="mb-1 text-xs font-normal text-neutral-500">Ожидаемый ответ</div>
-                                <div className="min-w-0 overflow-x-auto font-semibold">
-                                  {renderLatexBlock(card.answer_text)}
-                                </div>
+                            <div className="rounded-lg border border-[#E4E4E7] bg-[#F7F7F7] px-3 py-2 font-semibold text-neutral-900 shadow-[0_0_15px_rgba(34,197,94,0.1)] dark:border-[#27272A] dark:bg-[#121214] dark:text-neutral-100">
+                              <div className="mb-1 text-xs font-normal text-neutral-500">Ожидаемый ответ</div>
+                              <div className="min-w-0 overflow-x-auto font-semibold">
+                                {renderLatexBlock(card.answer_text)}
                               </div>
-                            )}
+                            </div>
                           </div>
                         )}
                         <div>

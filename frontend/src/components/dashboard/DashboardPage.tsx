@@ -16,8 +16,6 @@ interface DashboardHomePayload {
   readiness_index_view: number;
   readiness_index_ri: number;
   readiness_daily_delta: number;
-  due_today_count: number;
-  streak_days: number;
   accuracy_week_pct: number;
   total_cards_studied: number;
   mastery_avg_pct: number;
@@ -90,8 +88,6 @@ function normalizeDashboardPayload(raw: unknown): DashboardHomePayload {
     ),
     readiness_index_ri: num(j.readiness_index_ri, 0),
     readiness_daily_delta: num(j.readiness_daily_delta, 0),
-    due_today_count: Math.max(0, Math.floor(num(j.due_today_count, 0))),
-    streak_days: Math.max(0, Math.floor(num(j.streak_days, 0))),
     accuracy_week_pct: Math.max(
       0,
       Math.min(100, Math.round(num(j.accuracy_week_pct, 0)))
@@ -269,10 +265,6 @@ export default function DashboardPage() {
         <h1 className="text-[20px] font-medium text-neutral-900 dark:text-neutral-100">
           Добрый день, {data.user_name}
         </h1>
-        <p className="mt-1 text-[12px] text-neutral-500">
-          {data.due_today_count} карточек на сегодня · стрик{" "}
-          {data.streak_days} дней
-        </p>
       </div>
 
       <div className="mb-4 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
@@ -297,8 +289,14 @@ export default function DashboardPage() {
         <MetricCard
           label={`Освоение ${weakTopicShort}`}
           value={`${data.weak_topic_mastery_pct}%`}
-          delta="нужно внимание"
-          deltaType="warn"
+          delta={
+            data.weak_topic_mastery_pct >= 100
+              ? "все колоды в норме"
+              : "нужно внимание"
+          }
+          deltaType={
+            data.weak_topic_mastery_pct >= 100 ? "neutral" : "warn"
+          }
         />
       </div>
 

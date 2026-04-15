@@ -1924,6 +1924,10 @@ def dashboard_home_endpoint(
             }
         )
 
+    # Нет тем с M_current < 80% — слабой «зоны» нет; 0% вводит в заблуждение, показываем 100.
+    if weakest is None and decks_out:
+        weak_topic_mastery_pct = 100
+
     return {
         "user_name": authorized_student_user_account.user_full_display_name,
         "readiness_index_ri": readiness_index_ri_value,
