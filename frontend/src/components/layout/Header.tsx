@@ -105,7 +105,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
                   Колоды
                 </Link>
                 <Link
-                  href="/dashboard/session"
+                  href="/dashboard"
                   className="rounded-md bg-[#2F3437] px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-[0.85]"
                 >
                   Учёба →
@@ -207,7 +207,7 @@ function Header({ className, variant = "default" }: HeaderProps) {
                   Колоды
                 </Link>
                 <Link
-                  href="/dashboard/session"
+                  href="/dashboard"
                   onClick={() => setMenuOpen(false)}
                   className="rounded-md bg-[#2F3437] px-3.5 py-2 text-center text-[13px] font-medium text-white"
                 >

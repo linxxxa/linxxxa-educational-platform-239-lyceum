@@ -17,6 +17,8 @@ import { getToken } from "@/lib/auth";
 import { answerRedundantWithQuestion, sameCardText } from "@/lib/card-text";
 import { formatStudyTimeHours } from "@/lib/format-study-time";
 import { MatchingMode } from "@/components/session/MatchingMode";
+import { fetchFilteredDeckForMatchingTopic } from "@/components/session/matching-mode/fetchFilteredDeckForMatchingTopic";
+import { MIN_TOPIC_CARDS_FOR_MATCHING } from "@/components/session/matching-mode/matchingModeConstants";
 
 type Confidence = "тяжело" | "средне" | "легко";
 /** FSM: Question → Checking → Comparison → Rating → Transition → next card */
@@ -258,6 +260,10 @@ export default function StudyTopicPage({
   const [summaryLoaded, setSummaryLoaded] = useState(false);
   const [seenCardIds, setSeenCardIds] = useState<number[]>([]);
   const [fastTrackPinned, setFastTrackPinned] = useState(false);
+  /** Проверка колоды перед `?mode=match`: иначе нельзя открыть сопоставление. */
+  const [matchModeGate, setMatchModeGate] = useState<
+    "idle" | "checking" | "ok" | "blocked"
+  >("idle");
   const sessionInteractionsRef = useRef<SessionInteractionRecord[]>([]);
   const sessionRiBeforeRef = useRef<number | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -295,6 +301,39 @@ export default function StudyTopicPage({
     const t = window.setTimeout(() => setFastTrackPinned(false), 4500);
     return () => window.clearTimeout(t);
   }, [fastTrackPinned]);
+
+  useEffect(() => {
+    if (!isMatchMode) {
+      setMatchModeGate("idle");
+      return;
+    }
+    const tid = Number(topicId);
+    if (!Number.isFinite(tid) || tid <= 0) {
+      setMatchModeGate("checking");
+      return;
+    }
+    let cancelled = false;
+    setMatchModeGate("checking");
+    void (async () => {
+      try {
+        const filtered = await fetchFilteredDeckForMatchingTopic(tid);
+        if (cancelled) return;
+        if (filtered.length < MIN_TOPIC_CARDS_FOR_MATCHING) {
+          setMatchModeGate("blocked");
+          router.replace(`/study/${tid}`, { scroll: false });
+          return;
+        }
+        setMatchModeGate("ok");
+      } catch {
+        if (cancelled) return;
+        setMatchModeGate("blocked");
+        router.replace(`/study/${tid}`, { scroll: false });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isMatchMode, topicId, router]);
 
   const finishSession = useCallback(
     async (sessionSummaryOverride?: SessionSummarySnapshot) => {
@@ -616,6 +655,23 @@ export default function StudyTopicPage({
 
   if (isMatchMode) {
     const tid = Number(topicId) || 0;
+    if (
+      !Number.isFinite(tid) ||
+      tid <= 0 ||
+      matchModeGate === "idle" ||
+      matchModeGate === "checking"
+    ) {
+      return (
+        <div className="min-h-screen bg-neutral-100 px-6 py-12 dark:bg-neutral-950">
+          <div className="mx-auto max-w-md rounded-xl border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+            Загрузка режима сопоставления…
+          </div>
+        </div>
+      );
+    }
+    if (matchModeGate === "blocked") {
+      return null;
+    }
     return (
       <MatchingMode
         topicId={tid}

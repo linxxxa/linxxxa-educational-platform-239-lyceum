@@ -6,6 +6,8 @@ import { Puzzle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { shareDeckByEmail } from "@/lib/api/content";
+import { fetchFilteredDeckForMatchingTopic } from "@/components/session/matching-mode/fetchFilteredDeckForMatchingTopic";
+import { MIN_TOPIC_CARDS_FOR_MATCHING } from "@/components/session/matching-mode/matchingModeConstants";
 import {
   shareDeckEmailSchema,
   type ShareDeckEmailInput,
@@ -59,9 +61,29 @@ export default function DeckCard({ deck }: DeckCardProps) {
         ? null
         : `Освоено: ${m}%`;
   const cardsCount = Math.max(0, Math.floor(Number(deck.cards_count ?? 0) || 0));
-  const matchDisabled = cardsCount > 0 && cardsCount < 3;
+  const [matchingUsableCount, setMatchingUsableCount] = useState<number | null>(
+    null
+  );
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const filtered = await fetchFilteredDeckForMatchingTopic(deck.id);
+        if (!cancelled) setMatchingUsableCount(filtered.length);
+      } catch {
+        if (!cancelled) setMatchingUsableCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deck.id]);
+  const matchDisabled =
+    matchingUsableCount !== null
+      ? matchingUsableCount < MIN_TOPIC_CARDS_FOR_MATCHING
+      : cardsCount < MIN_TOPIC_CARDS_FOR_MATCHING;
   const matchHint = matchDisabled
-    ? "Добавьте еще хотя бы 2 карточки, чтобы начать игру"
+    ? "Нужно минимум три карточки с разным вопросом и ответом для сопоставления"
     : "Сопоставление";
   const [shareOpen, setShareOpen] = useState(false);
   const [shareOk, setShareOk] = useState<string | null>(null);

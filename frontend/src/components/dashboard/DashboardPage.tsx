@@ -134,6 +134,10 @@ function PageContent({ children }: { children: React.ReactNode }) {
 export default function DashboardPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  /** Примитивы из query — сам объект searchParams часто меняет ссылку и зацикливает эффекты. */
+  const shareTokenQuery = searchParams.get("shareToken")?.trim() ?? "";
+  const refreshQuery = searchParams.get("refresh");
+  const deckIdQuery = searchParams.get("deckId")?.trim() ?? "";
   const [data, setData] = useState<DashboardHomePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const didLoadRef = useRef(false);
@@ -149,11 +153,9 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    const shareToken = searchParams.get("shareToken")?.trim();
-    if (shareToken) {
-      router.replace(`/decks/share/${encodeURIComponent(shareToken)}`);
-    }
-  }, [router, searchParams]);
+    if (!shareTokenQuery) return;
+    router.replace(`/decks/share/${encodeURIComponent(shareTokenQuery)}`);
+  }, [router, shareTokenQuery]);
 
   const load = useCallback(async () => {
     const t = getToken();
@@ -172,8 +174,9 @@ export default function DashboardPage() {
       res = await fetch("/api/study/dashboard-home", {
         headers: { Authorization: `Bearer ${t}` },
         signal: controller.signal,
+        cache: "no-store",
       });
-    } catch (e) {
+    } catch {
       // Abort on route change/unmount should be silent.
       if (controller.signal.aborted) return;
       if (mountedRef.current) {
@@ -194,17 +197,20 @@ export default function DashboardPage() {
   }, [router]);
 
   useEffect(() => {
-    const r = searchParams.get("refresh");
-    if (r !== "1" && r !== "progress") return;
-    void load();
-    window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
-    router.replace("/dashboard", { scroll: false });
-  }, [router, searchParams, load]);
+    if (refreshQuery !== "1" && refreshQuery !== "progress") return;
+    queueMicrotask(() => {
+      void load();
+      window.dispatchEvent(new CustomEvent("edulab-dashboard-refresh"));
+      router.replace("/dashboard", { scroll: false });
+    });
+  }, [router, refreshQuery, load]);
 
   useEffect(() => {
     if (didLoadRef.current) return;
     didLoadRef.current = true;
-    void load();
+    queueMicrotask(() => {
+      void load();
+    });
   }, [load]);
 
   useEffect(() => {
@@ -215,15 +221,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!data?.decks?.length) return;
-    const raw = searchParams.get("deckId")?.trim();
-    if (!raw) return;
-    const id = Number(raw);
+    if (!deckIdQuery) return;
+    const id = Number(deckIdQuery);
     if (!Number.isFinite(id)) return;
     const hasDeck = data.decks.some((d) => d.id === id);
     if (!hasDeck) return;
     const el = document.getElementById(`deck-${id}`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [data, searchParams]);
+  }, [data, deckIdQuery]);
 
   if (!data && !error) {
     return (

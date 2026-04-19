@@ -1,6 +1,9 @@
 import type { PairCountOption } from "@/lib/matching-subset";
 import { computeMaxVisiblePairCountLabel } from "./computeMaxVisiblePairCountLabel";
-import { MATCHING_PAIR_COUNT_OPTIONS_LIST } from "./matchingModeConstants";
+import {
+  MATCHING_PAIR_COUNT_OPTIONS_LIST,
+  MIN_TOPIC_CARDS_FOR_MATCHING,
+} from "./matchingModeConstants";
 import { MatchingModePairCountPresetButton } from "./MatchingModePairCountPresetButton";
 import type { MatchingModeViewModel } from "./useMatchingModeStateMachine";
 
@@ -45,7 +48,7 @@ export function MatchingModeSetupPanel(props: {
       </div>
       <button
         type="button"
-        disabled={deckMeta.topicDeckCards.length < 3}
+        disabled={deckMeta.topicDeckCards.length < MIN_TOPIC_CARDS_FOR_MATCHING}
         onClick={startRoundWithCurrentPreset}
         className="mt-6 rounded-md bg-[#2F3437] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-40"
       >

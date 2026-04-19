@@ -7,14 +7,16 @@ import secrets
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.deck_share_token import DeckShareTokenModel
 from app.models.learning_card import LearningCardModel, LearningCardTypeEnum
+from app.models.learning_interaction import LearningInteractionsModel
 from app.models.learning_subject import LearningSubjectModel
 from app.models.learning_topic import LearningTopicModel
 from app.models.user_account import UserAccountModel
+from app.models.user_card_progress import UserCardProgressModel
 from app.schemas.content import CardPayloadItem
 from app.services.email_delivery import try_send_html_email
 from app.services.user_analytics_service import recalculate_topic_knowledge_level_for_owner
@@ -27,6 +29,20 @@ _CARD_TYPE_FROM_PROTOCOL = {
     "FORMULA": LearningCardTypeEnum.formula,
     "TASK": LearningCardTypeEnum.task,
 }
+
+_CARD_TYPE_TO_PROTOCOL: dict[LearningCardTypeEnum, str] = {
+    LearningCardTypeEnum.concept: "CONCEPT",
+    LearningCardTypeEnum.formula: "FORMULA",
+    LearningCardTypeEnum.task: "TASK",
+}
+
+
+def card_type_category_string_from_enum(
+    value: LearningCardTypeEnum | None,
+) -> str:
+    if value is None:
+        return "CONCEPT"
+    return _CARD_TYPE_TO_PROTOCOL.get(value, "CONCEPT")
 
 
 def validate_latex_delimiters_basic(card_content_question_latex: str, card_content_answer_latex: str) -> None:
@@ -288,6 +304,126 @@ def add_cards_to_topic_transaction(
     )
     database_session_instance.commit()
     return card_ids
+
+
+def update_learning_card_for_topic_owner(
+    database_session_instance: Session,
+    *,
+    authorized_user_account_identifier: int,
+    topic_unique_identifier: int,
+    card_unique_identifier: int,
+    payload: CardPayloadItem,
+) -> LearningCardModel:
+    """Обновляет текст и тип карточки (только владелец, карточка из указанной темы)."""
+    topic = database_session_instance.get(
+        LearningTopicModel, int(topic_unique_identifier)
+    )
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Колода не найдена")
+    if int(topic.topic_owner_user_id or 0) != int(authorized_user_account_identifier):
+        raise HTTPException(status_code=403, detail="Нет доступа к этой колоде")
+
+    card = database_session_instance.get(
+        LearningCardModel, int(card_unique_identifier)
+    )
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
+    if int(card.owner_user_account_id) != int(authorized_user_account_identifier):
+        raise HTTPException(status_code=403, detail="Нет доступа к этой карточке")
+    if int(card.parent_topic_reference_id) != int(topic_unique_identifier):
+        raise HTTPException(status_code=400, detail="Карточка не из этой колоды")
+
+    validate_latex_delimiters_basic(
+        payload.card_content_question_latex,
+        payload.card_content_answer_latex,
+    )
+    cat = _CARD_TYPE_FROM_PROTOCOL.get(
+        str(payload.card_type_category).upper(),
+        LearningCardTypeEnum.concept,
+    )
+    card.card_question_text_payload = payload.card_content_question_latex.strip()
+    card.card_answer_text_payload = payload.card_content_answer_latex.strip()
+    card.card_type = cat
+
+    database_session_instance.add(card)
+    recalculate_topic_knowledge_level_for_owner(
+        database_session_instance,
+        authorized_user_account_identifier,
+        int(topic_unique_identifier),
+    )
+    database_session_instance.commit()
+    database_session_instance.refresh(card)
+    return card
+
+
+def delete_learning_card_for_topic_owner(
+    database_session_instance: Session,
+    *,
+    authorized_user_account_identifier: int,
+    topic_unique_identifier: int,
+    card_unique_identifier: int,
+) -> None:
+    """Удаляет карточку и прогресс пользователя по ней; обновляет счётчик темы."""
+    topic = database_session_instance.get(
+        LearningTopicModel, int(topic_unique_identifier)
+    )
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Колода не найдена")
+    if int(topic.topic_owner_user_id or 0) != int(authorized_user_account_identifier):
+        raise HTTPException(status_code=403, detail="Нет доступа к этой колоде")
+
+    card = database_session_instance.get(
+        LearningCardModel, int(card_unique_identifier)
+    )
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
+    if int(card.owner_user_account_id) != int(authorized_user_account_identifier):
+        raise HTTPException(status_code=403, detail="Нет доступа к этой карточке")
+    if int(card.parent_topic_reference_id) != int(topic_unique_identifier):
+        raise HTTPException(status_code=400, detail="Карточка не из этой колоды")
+
+    database_session_instance.query(UserCardProgressModel).filter(
+        UserCardProgressModel.progress_target_card_unique_identifier
+        == int(card_unique_identifier),
+        UserCardProgressModel.progress_owner_user_account_id
+        == int(authorized_user_account_identifier),
+    ).delete(synchronize_session=False)
+
+    # Иначе при старой схеме SQLite (FK без ON DELETE SET NULL) удаление
+    # learning_cards падает, если есть строки в interactions.
+    database_session_instance.execute(
+        update(LearningInteractionsModel)
+        .where(
+            LearningInteractionsModel.interaction_target_card_unique_identifier
+            == int(card_unique_identifier)
+        )
+        .values(interaction_target_card_unique_identifier=None)
+    )
+
+    database_session_instance.delete(card)
+    database_session_instance.flush()
+
+    remaining = (
+        database_session_instance.execute(
+            select(func.count())
+            .select_from(LearningCardModel)
+            .where(
+                LearningCardModel.parent_topic_reference_id
+                == int(topic_unique_identifier),
+                LearningCardModel.owner_user_account_id
+                == int(authorized_user_account_identifier),
+            )
+        ).scalar()
+        or 0
+    )
+    topic.related_topics_count = int(remaining)
+    database_session_instance.add(topic)
+    recalculate_topic_knowledge_level_for_owner(
+        database_session_instance,
+        authorized_user_account_identifier,
+        int(topic_unique_identifier),
+    )
+    database_session_instance.commit()
 
 
 USER_NOT_FOUND_SHARE_MESSAGE = (

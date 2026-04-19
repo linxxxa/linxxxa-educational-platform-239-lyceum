@@ -30,6 +30,7 @@ import type {
 import { parsePairCountOptionFromUrlValue } from "./parsePairCountOptionFromUrlValue";
 import { resetMatchingSessionAfterDeckReload } from "./resetMatchingSessionAfterDeckReload";
 import { submitCompletedMatchingRoundToServer } from "./submitCompletedMatchingRoundToServer";
+import { MIN_TOPIC_CARDS_FOR_MATCHING } from "./matchingModeConstants";
 
 export type MatchingModeViewModel = {
   deckMeta: MatchingDeckMetaState;
@@ -307,7 +308,7 @@ export function useMatchingModeStateMachine(
 
   const beginPlayRoundWithPairCount = useCallback(
     (pairCountChoice: PairCountOption) => {
-      if (deckMeta.topicDeckCards.length < 3) return;
+      if (deckMeta.topicDeckCards.length < MIN_TOPIC_CARDS_FOR_MATCHING) return;
       persistedPairCountOptionRef.current = pairCountChoice;
       studySessionIdRef.current = crypto.randomUUID();
       admireGenerationCounterRef.current += 1;
@@ -397,7 +398,8 @@ export function useMatchingModeStateMachine(
     formatElapsedSecondsForTimerDisplay(roundState.elapsedSecondsInRound);
 
   const isTopicDeckTooSmall =
-    !deckMeta.isDeckLoading && deckMeta.topicDeckCards.length < 3;
+    !deckMeta.isDeckLoading &&
+    deckMeta.topicDeckCards.length < MIN_TOPIC_CARDS_FOR_MATCHING;
 
   const isBoardInteractionLocked =
     computeIsMatchingBoardInputLocked(roundState);

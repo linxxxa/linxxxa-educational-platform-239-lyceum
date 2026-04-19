@@ -236,6 +236,16 @@ export default function TopicsListPage() {
               className="min-h-[90px] w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] dark:border-neutral-800 dark:bg-neutral-900"
             />
 
+            <p className="mt-4">
+              <Link
+                href={`/dashboard/topics/${editing.topic_unique_identifier}/cards/add`}
+                onClick={() => setEditing(null)}
+                className="text-[13px] font-medium text-[#2F3437] underline-offset-2 hover:underline dark:text-neutral-200"
+              >
+                Карточки колоды: список, правка и удаление
+              </Link>
+            </p>
+
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"

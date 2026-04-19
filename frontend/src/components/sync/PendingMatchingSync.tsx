@@ -56,7 +56,8 @@ export function PendingMatchingSync() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- один прогон при монтировании (router в deps даёт лишние перезапуски)
+  }, []);
 
   if (!notice) return null;
   return (

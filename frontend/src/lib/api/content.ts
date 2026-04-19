@@ -1,5 +1,7 @@
 import { getToken } from "@/lib/auth";
 import type {
+  CardPayloadItem,
+  CardTypeCategoryProtocol,
   DeckBatchSaveRequest,
   LearningSubjectRecord,
   SubjectMetadataTransferObject,
@@ -136,6 +138,8 @@ export interface TopicCardListItem {
   answer_text: string;
   /** 0–100, из прогресса пользователя; по умолчанию 0 */
   mastery_level?: number;
+  /** CONCEPT / FORMULA / TASK с бэка */
+  card_type_category?: CardTypeCategoryProtocol;
 }
 
 export async function fetchCardsInTopic(
@@ -164,8 +168,74 @@ export async function fetchCardsInTopic(
         typeof o.mastery_level === "number" && Number.isFinite(o.mastery_level)
           ? o.mastery_level
           : 0,
+      card_type_category:
+        o.card_type_category === "CONCEPT" ||
+        o.card_type_category === "FORMULA" ||
+        o.card_type_category === "TASK"
+          ? o.card_type_category
+          : undefined,
     }))
     .filter((c) => c.card_id > 0);
+}
+
+export async function updateTopicCard(
+  topicId: number,
+  cardId: number,
+  payload: CardPayloadItem
+): Promise<TopicCardListItem> {
+  const res = await fetch(
+    `/api/content/topics/${topicId}/cards/${cardId}`,
+    {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const msg =
+      typeof e.detail === "string" ? e.detail : "Ошибка обновления карточки";
+    throw new Error(msg);
+  }
+  const o = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return {
+    card_id: Number(o.card_id) || cardId,
+    question_text: typeof o.question_text === "string" ? o.question_text : "",
+    answer_text: typeof o.answer_text === "string" ? o.answer_text : "",
+    mastery_level:
+      typeof o.mastery_level === "number" && Number.isFinite(o.mastery_level)
+        ? o.mastery_level
+        : undefined,
+    card_type_category:
+      o.card_type_category === "CONCEPT" ||
+      o.card_type_category === "FORMULA" ||
+      o.card_type_category === "TASK"
+        ? o.card_type_category
+        : undefined,
+  };
+}
+
+export async function deleteTopicCard(
+  topicId: number,
+  cardId: number
+): Promise<void> {
+  const res = await fetch(
+    `/api/content/topics/${topicId}/cards/${cardId}`,
+    {
+      method: "DELETE",
+      headers: authHeaders(),
+    }
+  );
+  // 204 No Content: в части окружений надёжнее проверять статус явно.
+  if (res.ok || res.status === 204) {
+    return;
+  }
+  const e = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const msg =
+    typeof e.detail === "string"
+      ? e.detail
+      : detailMessageFromResponse(e) ?? "Ошибка удаления карточки";
+  throw new Error(msg);
 }
 
 function detailMessageFromResponse(e: unknown): string | null {

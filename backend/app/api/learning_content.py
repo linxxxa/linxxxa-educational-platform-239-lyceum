@@ -11,6 +11,7 @@ from app.models.learning_topic import LearningTopicModel
 from app.models.user_account import UserAccountModel
 from app.models.user_card_progress import UserCardProgressModel
 from app.schemas.content import (
+    CardPayloadItem,
     DeckBatchSaveRequest,
     DeckShareByEmailRequest,
     LearningSubjectResponseSchema,
@@ -21,13 +22,16 @@ from app.schemas.content import (
 from app.services.content_deck_service import (
     add_cards_to_topic_transaction,
     accept_deck_share_token_for_user,
+    card_type_category_string_from_enum,
     create_deck_share_invite_and_send_email,
     create_learning_subject_and_persist,
+    delete_learning_card_for_topic_owner,
     fetch_subjects_owned_by_user,
     fetch_topics_for_user_optional_subject,
     delete_topic_for_owner,
     get_deck_share_token_preview,
     persist_deck_batch_transaction,
+    update_learning_card_for_topic_owner,
     update_topic_metadata_for_owner,
 )
 
@@ -111,6 +115,7 @@ def list_cards_in_topic_endpoint(
                 func.coalesce(
                     UserCardProgressModel.progress_mastery_level, 0.0
                 ),
+                LearningCardModel.card_type,
             )
             .outerjoin(
                 UserCardProgressModel,
@@ -136,10 +141,59 @@ def list_cards_in_topic_endpoint(
                 "question_text": str(r[1] or ""),
                 "answer_text": str(r[2] or ""),
                 "mastery_level": float(r[3] or 0.0),
+                "card_type_category": card_type_category_string_from_enum(r[4]),
             }
             for r in rows
         ]
     }
+
+
+@learning_content_router.put("/topics/{topic_id}/cards/{card_id}")
+def update_single_card_in_topic_endpoint(
+    topic_id: int,
+    card_id: int,
+    body: CardPayloadItem,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
+):
+    """Обновление одной карточки в колоде (владелец)."""
+    row = update_learning_card_for_topic_owner(
+        database_connection_session,
+        authorized_user_account_identifier=int(
+            authorized_user.user_unique_identifier
+        ),
+        topic_unique_identifier=int(topic_id),
+        card_unique_identifier=int(card_id),
+        payload=body,
+    )
+    return {
+        "card_id": int(row.card_unique_identifier),
+        "question_text": str(row.card_question_text_payload or ""),
+        "answer_text": str(row.card_answer_text_payload or ""),
+        "mastery_level": None,
+        "card_type_category": card_type_category_string_from_enum(row.card_type),
+    }
+
+
+@learning_content_router.delete(
+    "/topics/{topic_id}/cards/{card_id}", status_code=204
+)
+def delete_single_card_in_topic_endpoint(
+    topic_id: int,
+    card_id: int,
+    database_connection_session: Session = Depends(get_database_session_generator),
+    authorized_user: UserAccountModel = Depends(get_current_authorized_user_object),
+):
+    """Удаление одной карточки из колоды (владелец)."""
+    delete_learning_card_for_topic_owner(
+        database_connection_session,
+        authorized_user_account_identifier=int(
+            authorized_user.user_unique_identifier
+        ),
+        topic_unique_identifier=int(topic_id),
+        card_unique_identifier=int(card_id),
+    )
+    return None
 
 
 @learning_content_router.post("/decks/batch", status_code=201)

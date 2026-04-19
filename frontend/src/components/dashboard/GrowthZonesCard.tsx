@@ -2,6 +2,8 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useMemo, useState } from "react";
+import { fetchFilteredDeckForMatchingTopic } from "@/components/session/matching-mode/fetchFilteredDeckForMatchingTopic";
+import { MIN_TOPIC_CARDS_FOR_MATCHING } from "@/components/session/matching-mode/matchingModeConstants";
 
 type StudyMode = "classic" | "match" | "sprint";
 
@@ -31,6 +33,18 @@ const cfg = {
   },
 };
 
+function parseTopicIdFromStudyHref(href: string): number | null {
+  try {
+    const u = new URL(href, "http://local.invalid");
+    const m = u.pathname.match(/^\/study\/(\d+)/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 function zoneVisualStatus(zone: GrowthZone): "warn" | "mid" {
   if (zone.status === "warn" || zone.status === "mid") return zone.status;
   return zone.mastery < 50 ? "warn" : "mid";
@@ -49,6 +63,9 @@ export default function GrowthZonesCard({
   showAllClearMessage = false,
 }: GrowthZonesCardProps) {
   const [modeOpen, setModeOpen] = useState(false);
+  const [matchPreflightError, setMatchPreflightError] = useState<string | null>(
+    null
+  );
   const [pairs, setPairs] = useState<"5" | "10" | "all">(() => {
     try {
       const savedPairs = localStorage.getItem("edulab.match.pairs");
@@ -110,19 +127,41 @@ export default function GrowthZonesCard({
 
   const startMode = useCallback(
     (mode: StudyMode) => {
-      const href = buildHref(mode);
-      if (!href) return;
-      clickSound();
-      try {
-        localStorage.setItem("edulab.study.mode", mode);
-        if (mode === "match") {
-          localStorage.setItem("edulab.match.pairs", pairs);
-          localStorage.setItem("edulab.match.timer", timerOn ? "1" : "0");
+      void (async () => {
+        if (mode === "match" && firstStudyHref) {
+          const topicId = parseTopicIdFromStudyHref(firstStudyHref);
+          if (topicId != null) {
+            try {
+              const filtered = await fetchFilteredDeckForMatchingTopic(topicId);
+              if (filtered.length < MIN_TOPIC_CARDS_FOR_MATCHING) {
+                setMatchPreflightError(
+                  "В этой колоде слишком мало подходящих карточек для сопоставления (нужно минимум три с разным вопросом и ответом)."
+                );
+                return;
+              }
+            } catch {
+              setMatchPreflightError(
+                "Не удалось проверить колоду. Попробуйте позже."
+              );
+              return;
+            }
+          }
         }
-      } catch {}
-      window.location.href = href;
+        setMatchPreflightError(null);
+        const href = buildHref(mode);
+        if (!href) return;
+        clickSound();
+        try {
+          localStorage.setItem("edulab.study.mode", mode);
+          if (mode === "match") {
+            localStorage.setItem("edulab.match.pairs", pairs);
+            localStorage.setItem("edulab.match.timer", timerOn ? "1" : "0");
+          }
+        } catch {}
+        window.location.href = href;
+      })();
     },
-    [buildHref, clickSound, pairs, timerOn]
+    [buildHref, clickSound, firstStudyHref, pairs, timerOn]
   );
 
   const canOpen = Boolean(firstStudyHref);
@@ -189,6 +228,7 @@ export default function GrowthZonesCard({
         disabled={!canOpen}
         onClick={() => {
           if (!canOpen) return;
+          setMatchPreflightError(null);
           setModeOpen(true);
         }}
         className={`mt-4 w-full rounded-lg border py-2 text-center text-[12px] font-medium transition-colors ${
@@ -207,7 +247,10 @@ export default function GrowthZonesCard({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => setModeOpen(false)}
+            onClick={() => {
+              setMatchPreflightError(null);
+              setModeOpen(false);
+            }}
             role="presentation"
           >
             <motion.div
@@ -263,6 +306,12 @@ export default function GrowthZonesCard({
                 ))}
               </div>
 
+              {matchPreflightError ? (
+                <p className="mt-3 text-[12px] text-red-600 dark:text-red-400">
+                  {matchPreflightError}
+                </p>
+              ) : null}
+
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900/40">
                   <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
@@ -304,7 +353,10 @@ export default function GrowthZonesCard({
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setModeOpen(false)}
+                  onClick={() => {
+                    setMatchPreflightError(null);
+                    setModeOpen(false);
+                  }}
                   className="rounded-md border border-neutral-200 px-4 py-2 text-[12px] text-neutral-700 dark:border-neutral-800 dark:text-neutral-200"
                 >
                   Закрыть
