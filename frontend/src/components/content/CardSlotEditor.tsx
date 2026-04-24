@@ -126,7 +126,8 @@ export function CardSlotEditor({
             <p className="mt-1 text-[11px] text-red-500">{errors.question}</p>
           )}
           <p className="mt-1 text-[11px] text-neutral-500">
-            Предпросмотр (KaTeX)
+            Предпросмотр · KaTeX при <code className="text-[10px]">$$</code> или{" "}
+            <code className="text-[10px]">$…$</code>
           </p>
           <div className="mt-1">
             <LatexPreview
@@ -159,7 +160,8 @@ export function CardSlotEditor({
             <p className="mt-1 text-[11px] text-red-500">{errors.answer}</p>
           )}
           <p className="mt-1 text-[11px] text-neutral-500">
-            Предпросмотр (KaTeX)
+            Предпросмотр · KaTeX при <code className="text-[10px]">$$</code> или{" "}
+            <code className="text-[10px]">$…$</code>
           </p>
           <div className="mt-1">
             <LatexPreview

@@ -54,7 +54,6 @@ export type MatchingModeViewModel = {
   ) => void;
   reloadTopicDeckFromServer: () => Promise<void>;
   beginPlayRoundWithPairCount: (pairCountChoice: PairCountOption) => void;
-  reshuffleCurrentRoundKeepingPairCount: () => void;
   toggleSelectQuestionTile: (cardId: number) => void;
   toggleSelectAnswerTile: (cardId: number) => void;
   updatePairCountPresetForSetup: (nextPreset: PairCountOption) => void;
@@ -105,10 +104,16 @@ export function useMatchingModeStateMachine(
   const studySessionIdRef = useRef<string | null>(null);
   const persistedPairCountOptionRef = useRef<PairCountOption>(10);
   const elapsedSecondsMirrorRef = useRef(0);
+  /** Уже автостартовали с URL (дашборд передаёт `pairs=…`); не дублировать экран настройки. */
+  const didAutoStartFromPairsQueryRef = useRef(false);
 
   const [lineSegments, setLineSegments] = useState<MatchingBoardLineSegment[]>(
     []
   );
+
+  useEffect(() => {
+    didAutoStartFromPairsQueryRef.current = false;
+  }, [learningTopicId]);
 
   // Подстраиваем пресет числа пар под query-параметр страницы study.
   useEffect(() => {
@@ -330,29 +335,28 @@ export function useMatchingModeStateMachine(
     [deckMeta.topicDeckCards]
   );
 
-  const reshuffleCurrentRoundKeepingPairCount = useCallback(() => {
-    if (roundState.phase !== "play" || deckMeta.topicDeckCards.length === 0) {
-      return;
-    }
-    studySessionIdRef.current = crypto.randomUUID();
-    admireGenerationCounterRef.current += 1;
-    matchingResultsBatchRef.current = [];
-    setRoundState((previous) => ({
-      ...previous,
-      roundCards: getShuffledSubset(
-        deckMeta.topicDeckCards,
-        persistedPairCountOptionRef.current
-      ),
-      matchedCardIds: [],
-      selectedQuestionCardId: null,
-      selectedAnswerCardId: null,
-      mismatchPair: null,
-      elapsedSecondsInRound: 0,
-      syncPhase: "idle",
-      batchSummary: null,
-      wrongTouchCountByCardId: {},
-    }));
-  }, [deckMeta.topicDeckCards, roundState.phase]);
+  // Если в ссылке уже есть `pairs=` (после выбора на дашборде) — сразу начинаем раунд.
+  useEffect(() => {
+    const raw = pairCountUrlQueryValue?.trim();
+    const explicitPairsInUrl =
+      raw === "5" ||
+      raw === "10" ||
+      raw === "15" ||
+      raw === "all";
+    if (!explicitPairsInUrl) return;
+    if (deckMeta.isDeckLoading || deckMeta.deckLoadErrorMessage) return;
+    if (deckMeta.topicDeckCards.length < MIN_TOPIC_CARDS_FOR_MATCHING) return;
+    if (didAutoStartFromPairsQueryRef.current) return;
+    didAutoStartFromPairsQueryRef.current = true;
+    const preset = parsePairCountOptionFromUrlValue(raw);
+    beginPlayRoundWithPairCount(preset);
+  }, [
+    pairCountUrlQueryValue,
+    deckMeta.isDeckLoading,
+    deckMeta.deckLoadErrorMessage,
+    deckMeta.topicDeckCards.length,
+    beginPlayRoundWithPairCount,
+  ]);
 
   const bindQuestionTileRef = useCallback(
     (cardId: number, element: HTMLButtonElement | null) => {
@@ -420,7 +424,6 @@ export function useMatchingModeStateMachine(
     bindAnswerTileRef,
     reloadTopicDeckFromServer,
     beginPlayRoundWithPairCount,
-    reshuffleCurrentRoundKeepingPairCount,
     toggleSelectQuestionTile,
     toggleSelectAnswerTile,
     updatePairCountPresetForSetup,

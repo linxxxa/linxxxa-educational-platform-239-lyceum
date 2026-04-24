@@ -124,12 +124,41 @@ function answerAlreadyInQuestionBody(card: StudyCard): boolean {
   );
 }
 
+/**
+ * Вопрос/эталонный ответ: KaTeX только если явно есть `$$` или вся строка в `$...$`.
+ * Иначе — обычный текст: в `BlockMath` пробелы в русском тексте схлопываются.
+ */
 function renderLatexBlock(content: string) {
-  const withoutDelimiters = content.replace(/\$\$/g, "");
-  const math = withoutDelimiters.length > 0 ? withoutDelimiters : content;
+  const raw = content ?? "";
+  const t = raw.trim();
+  if (!t) {
+    return <span className="text-neutral-500">—</span>;
+  }
+  if (raw.includes("$$")) {
+    const withoutDelimiters = raw.replace(/\$\$/g, "");
+    const math = withoutDelimiters.length > 0 ? withoutDelimiters : raw;
+    return (
+      <div className="min-w-0 max-w-full whitespace-pre-wrap break-words text-center leading-[1.6]">
+        <BlockMath math={math} />
+      </div>
+    );
+  }
+  if (
+    t.startsWith("$") &&
+    t.endsWith("$") &&
+    t.length > 2 &&
+    !t.slice(1, -1).includes("$")
+  ) {
+    const inner = t.slice(1, -1);
+    return (
+      <div className="min-w-0 max-w-full text-center leading-[1.6]">
+        <InlineMath math={inner} />
+      </div>
+    );
+  }
   return (
-    <div className="min-w-0 max-w-full whitespace-pre-wrap break-words text-center leading-[1.6]">
-      <BlockMath math={math} />
+    <div className="min-w-0 max-w-full whitespace-pre-wrap break-words text-center text-[16px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+      {raw}
     </div>
   );
 }

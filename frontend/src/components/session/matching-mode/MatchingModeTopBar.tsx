@@ -3,7 +3,7 @@ import { MatchingModeDeckRefreshButton } from "./MatchingModeDeckRefreshButton";
 import { MatchingModeTitleAndSubtitle } from "./MatchingModeTitleAndSubtitle";
 import type { MatchingModeViewModel } from "./useMatchingModeStateMachine";
 
-/** Верхняя панель: назад, статус, обновить/перемешать. */
+/** Верхняя панель: назад, статус, при необходимости обновить колоду. */
 export function MatchingModeTopBar(props: {
   viewModel: MatchingModeViewModel;
   onExitMatchingMode: () => void;
