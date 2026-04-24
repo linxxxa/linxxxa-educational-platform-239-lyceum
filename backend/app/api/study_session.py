@@ -1897,7 +1897,6 @@ def dashboard_home_endpoint(
         .order_by(
             func.coalesce(LearningTopicModel.topic_knowledge_level_0_100, 0.0).asc(),
         )
-        .limit(6)
     )
     deck_rows = database_connection_session.execute(decks_query).all()
     decks_out = []

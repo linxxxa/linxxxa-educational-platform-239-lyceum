@@ -184,13 +184,6 @@ export default function RegisterForm() {
           {isSubmitting ? "Создаём аккаунт..." : "Зарегистрироваться →"}
         </button>
       </form>
-
-      <p className="mt-4 text-center text-[11px] text-neutral-400">
-        Нажимая, вы соглашаетесь с{" "}
-        <Link href="/terms" className="underline">
-          условиями использования
-        </Link>
-      </p>
     </div>
   );
 }

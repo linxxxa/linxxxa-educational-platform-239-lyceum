@@ -255,6 +255,8 @@ export default function DashboardPage() {
     : 0;
   const deltaLabel = `${deltaRi >= 0 ? "+" : ""}${deltaRi.toFixed(1)} сегодня`;
   const weakTopicShort = truncateLabel(data.weak_topic_name);
+  const allDecksMastered100 =
+    data.decks.length > 0 && data.decks.every((d) => (d.mastery ?? 0) >= 100);
 
   const firstZone = data.zones[0];
   const firstStudyHref =
@@ -316,6 +318,7 @@ export default function DashboardPage() {
           zones={data.zones.slice(0, 4)}
           firstStudyHref={firstStudyHref}
           showAllClearMessage={data.decks.length > 0}
+          hideStartButton={allDecksMastered100}
         />
       </div>
 

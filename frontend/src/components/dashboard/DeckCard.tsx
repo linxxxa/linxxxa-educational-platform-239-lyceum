@@ -83,7 +83,7 @@ export default function DeckCard({ deck }: DeckCardProps) {
       ? matchingUsableCount < MIN_TOPIC_CARDS_FOR_MATCHING
       : cardsCount < MIN_TOPIC_CARDS_FOR_MATCHING;
   const matchHint = matchDisabled
-    ? "Нужно минимум три карточки с разным вопросом и ответом для сопоставления"
+    ? "Нужно минимум три карточки с непустым вопросом и ответом для сопоставления"
     : "Сопоставление";
   const [shareOpen, setShareOpen] = useState(false);
   const [shareOk, setShareOk] = useState<string | null>(null);

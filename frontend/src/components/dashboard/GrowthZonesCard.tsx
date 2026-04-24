@@ -55,14 +55,19 @@ interface GrowthZonesCardProps {
   firstStudyHref?: string | null;
   /** Если true и список зон пуст — показываем «все темы в порядке». */
   showAllClearMessage?: boolean;
+  /** Если true — скрываем кнопку «Начать тренировку». */
+  hideStartButton?: boolean;
 }
 
 export default function GrowthZonesCard({
   zones,
   firstStudyHref,
   showAllClearMessage = false,
+  hideStartButton = false,
 }: GrowthZonesCardProps) {
   const [modeOpen, setModeOpen] = useState(false);
+  /** После выбора «Сопоставление» — показываем число пар и таймер. */
+  const [matchConfigStep, setMatchConfigStep] = useState(false);
   const [matchPreflightError, setMatchPreflightError] = useState<string | null>(
     null
   );
@@ -126,16 +131,20 @@ export default function GrowthZonesCard({
   );
 
   const startMode = useCallback(
-    (mode: StudyMode) => {
+    (mode: StudyMode, options?: { skipMatchPreflight?: boolean }) => {
       void (async () => {
-        if (mode === "match" && firstStudyHref) {
+        if (
+          mode === "match" &&
+          firstStudyHref &&
+          !options?.skipMatchPreflight
+        ) {
           const topicId = parseTopicIdFromStudyHref(firstStudyHref);
           if (topicId != null) {
             try {
               const filtered = await fetchFilteredDeckForMatchingTopic(topicId);
               if (filtered.length < MIN_TOPIC_CARDS_FOR_MATCHING) {
                 setMatchPreflightError(
-                  "В этой колоде слишком мало подходящих карточек для сопоставления (нужно минимум три с разным вопросом и ответом)."
+                  "В этой колоде слишком мало карточек для сопоставления (нужно минимум три с непустым вопросом и ответом)."
                 );
                 return;
               }
@@ -163,6 +172,32 @@ export default function GrowthZonesCard({
     },
     [buildHref, clickSound, firstStudyHref, pairs, timerOn]
   );
+
+  const onPickMatchMode = useCallback(() => {
+    setMatchPreflightError(null);
+    void (async () => {
+      if (!firstStudyHref) return;
+      const topicId = parseTopicIdFromStudyHref(firstStudyHref);
+      if (topicId != null) {
+        try {
+          const filtered = await fetchFilteredDeckForMatchingTopic(topicId);
+          if (filtered.length < MIN_TOPIC_CARDS_FOR_MATCHING) {
+            setMatchPreflightError(
+              "В этой колоде слишком мало карточек для сопоставления (нужно минимум три с непустым вопросом и ответом)."
+            );
+            return;
+          }
+        } catch {
+          setMatchPreflightError(
+            "Не удалось проверить колоду. Попробуйте позже."
+          );
+          return;
+        }
+      }
+      setMatchPreflightError(null);
+      setMatchConfigStep(true);
+    })();
+  }, [firstStudyHref]);
 
   const canOpen = Boolean(firstStudyHref);
   const openLabel = useMemo(() => "Начать тренировку →", []);
@@ -223,22 +258,25 @@ export default function GrowthZonesCard({
         )}
       </div>
 
-      <button
-        type="button"
-        disabled={!canOpen}
-        onClick={() => {
-          if (!canOpen) return;
-          setMatchPreflightError(null);
-          setModeOpen(true);
-        }}
-        className={`mt-4 w-full rounded-lg border py-2 text-center text-[12px] font-medium transition-colors ${
-          canOpen
-            ? "border-neutral-200 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            : "cursor-not-allowed border-neutral-200 text-neutral-400 dark:border-neutral-700"
-        }`}
-      >
-        {openLabel}
-      </button>
+      {hideStartButton ? null : (
+        <button
+          type="button"
+          disabled={!canOpen}
+          onClick={() => {
+            if (!canOpen) return;
+            setMatchPreflightError(null);
+            setMatchConfigStep(false);
+            setModeOpen(true);
+          }}
+          className={`mt-4 w-full rounded-lg border py-2 text-center text-[12px] font-medium transition-colors ${
+            canOpen
+              ? "border-neutral-200 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              : "cursor-not-allowed border-neutral-200 text-neutral-400 dark:border-neutral-700"
+          }`}
+        >
+          {openLabel}
+        </button>
+      )}
 
       <AnimatePresence>
         {modeOpen ? (
@@ -249,6 +287,7 @@ export default function GrowthZonesCard({
             exit={{ opacity: 0 }}
             onClick={() => {
               setMatchPreflightError(null);
+              setMatchConfigStep(false);
               setModeOpen(false);
             }}
             role="presentation"
@@ -265,103 +304,146 @@ export default function GrowthZonesCard({
             >
               <div className="mb-4">
                 <p className="text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
-                  Выберите режим
+                  {matchConfigStep
+                    ? "Сопоставление: настройки"
+                    : "Выберите режим"}
                 </p>
                 <p className="mt-1 text-[12px] text-neutral-500">
-                  Режим запоминается и будет предлагаться по умолчанию.
+                  {matchConfigStep
+                    ? "Выберите число пар и при необходимости включите таймер."
+                    : "Режим запоминается и будет предлагаться по умолчанию."}
                 </p>
               </div>
 
-              <div className="grid gap-2 md:grid-cols-3">
-                {[
-                  {
-                    id: "classic" as const,
-                    title: "Классика",
-                    desc: "Переворачивание карточек (Q-оценки)",
-                  },
-                  {
-                    id: "match" as const,
-                    title: "Сопоставление",
-                    desc: "Соединение пар (ассоциации)",
-                  },
-                  {
-                    id: "sprint" as const,
-                    title: "Спринт",
-                    desc: "Верно/Неверно на время",
-                  },
-                ].map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => startMode(m.id)}
-                    className="group rounded-xl border border-neutral-200 bg-white p-3 text-left transition-all hover:-translate-y-0.5 hover:border-neutral-300 hover:shadow-md dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
-                  >
-                    <div className="text-[13px] font-medium text-neutral-900 dark:text-neutral-100">
-                      {m.title}
+              {matchConfigStep ? (
+                <>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900/40">
+                      <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
+                        Число пар
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(["5", "10", "all"] as const).map((p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setPairs(p)}
+                            className={`rounded-md border px-3 py-1 text-[11px] ${
+                              pairs === p
+                                ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
+                                : "border-neutral-200 bg-white text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200"
+                            }`}
+                          >
+                            {p === "all" ? "все пары" : `${p} пар`}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="mt-1 text-[11px] text-neutral-500">
-                      {m.desc}
+
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900/40">
+                      <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
+                        На время
+                      </div>
+                      <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-neutral-600 dark:text-neutral-300">
+                        <input
+                          type="checkbox"
+                          checked={timerOn}
+                          onChange={(e) => setTimerOn(e.target.checked)}
+                        />
+                        Включить таймер
+                      </label>
                     </div>
-                  </button>
-                ))}
-              </div>
-
-              {matchPreflightError ? (
-                <p className="mt-3 text-[12px] text-red-600 dark:text-red-400">
-                  {matchPreflightError}
-                </p>
-              ) : null}
-
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900/40">
-                  <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
-                    Quick settings (сопоставление)
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {(["5", "10", "all"] as const).map((p) => (
+
+                  {matchPreflightError ? (
+                    <p className="mt-3 text-[12px] text-red-600 dark:text-red-400">
+                      {matchPreflightError}
+                    </p>
+                  ) : null}
+
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMatchPreflightError(null);
+                        setMatchConfigStep(false);
+                      }}
+                      className="rounded-md border border-neutral-200 px-4 py-2 text-[12px] text-neutral-700 dark:border-neutral-800 dark:text-neutral-200"
+                    >
+                      ← К режимам
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        startMode("match", { skipMatchPreflight: true })
+                      }
+                      className="rounded-md bg-[#2F3437] px-4 py-2 text-[12px] font-medium text-white hover:opacity-90"
+                    >
+                      Начать сопоставление
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {[
+                      {
+                        id: "classic" as const,
+                        title: "Классика",
+                        desc: "Переворачивание карточек (Q-оценки)",
+                      },
+                      {
+                        id: "match" as const,
+                        title: "Сопоставление",
+                        desc: "Соединение пар (ассоциации)",
+                      },
+                      {
+                        id: "sprint" as const,
+                        title: "Спринт",
+                        desc: "Верно/Неверно на время",
+                      },
+                    ].map((m) => (
                       <button
-                        key={p}
+                        key={m.id}
                         type="button"
-                        onClick={() => setPairs(p)}
-                        className={`rounded-md border px-3 py-1 text-[11px] ${
-                          pairs === p
-                            ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
-                            : "border-neutral-200 bg-white text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200"
-                        }`}
+                        onClick={() =>
+                          m.id === "match"
+                            ? onPickMatchMode()
+                            : startMode(m.id)
+                        }
+                        className="group rounded-xl border border-neutral-200 bg-white p-3 text-left transition-all hover:-translate-y-0.5 hover:border-neutral-300 hover:shadow-md dark:border-neutral-800 dark:bg-neutral-950 dark:hover:border-neutral-700"
                       >
-                        {p === "all" ? "все пары" : `${p} пар`}
+                        <div className="text-[13px] font-medium text-neutral-900 dark:text-neutral-100">
+                          {m.title}
+                        </div>
+                        <div className="mt-1 text-[11px] text-neutral-500">
+                          {m.desc}
+                        </div>
                       </button>
                     ))}
                   </div>
-                </div>
 
-                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900/40">
-                  <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
-                    На время
+                  {matchPreflightError ? (
+                    <p className="mt-3 text-[12px] text-red-600 dark:text-red-400">
+                      {matchPreflightError}
+                    </p>
+                  ) : null}
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMatchPreflightError(null);
+                        setMatchConfigStep(false);
+                        setModeOpen(false);
+                      }}
+                      className="rounded-md border border-neutral-200 px-4 py-2 text-[12px] text-neutral-700 dark:border-neutral-800 dark:text-neutral-200"
+                    >
+                      Закрыть
+                    </button>
                   </div>
-                  <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-neutral-600 dark:text-neutral-300">
-                    <input
-                      type="checkbox"
-                      checked={timerOn}
-                      onChange={(e) => setTimerOn(e.target.checked)}
-                    />
-                    Включить таймер
-                  </label>
-                </div>
-              </div>
-
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMatchPreflightError(null);
-                    setModeOpen(false);
-                  }}
-                  className="rounded-md border border-neutral-200 px-4 py-2 text-[12px] text-neutral-700 dark:border-neutral-800 dark:text-neutral-200"
-                >
-                  Закрыть
-                </button>
-              </div>
+                </>
+              )}
             </motion.div>
           </motion.div>
         ) : null}
